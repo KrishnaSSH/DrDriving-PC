@@ -1,0 +1,16 @@
+[package]
+name = "drdriving"
+version = "0.1.0"
+edition = "2021"
+description = "Playable single-player port of Dr. Driving 1.73 (macroquad front end for drdriving_core)"
+
+[dependencies]
+drdriving_core = { path = ".." }
+macroquad = { version = "0.4", default-features = false }
+
+# the built-in mixer is only used where it is safe (see build.rs)
+[target.'cfg(any(target_arch = "wasm32", not(target_os = "linux")))'.dependencies]
+macroquad = { version = "0.4", default-features = false, features = ["audio"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
