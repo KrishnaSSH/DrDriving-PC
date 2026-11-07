@@ -21,6 +21,7 @@ struct Opts {
     no_traffic: bool,
     ff: u32,
     audio_test: bool,
+    gui: i32,
 }
 
 fn parse() -> Opts {
@@ -38,12 +39,14 @@ fn parse() -> Opts {
         no_traffic: false,
         ff: 1,
         audio_test: false,
+        gui: 0,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
             "--shot" => c.shot = it.next(),
             "--scene" => c.scene = it.next().unwrap_or_default(),
+            "--gui" => c.gui = it.next().and_then(|s| s.parse().ok()).unwrap_or(0),
             "--seed" => c.seed = it.next().and_then(|s| s.parse().ok()),
             "--wait" => c.wait = it.next().and_then(|s| s.parse().ok()).unwrap_or(3),
             "--autopilot" => c.autopilot = true,
@@ -102,7 +105,8 @@ pub async fn run() {
     if o.ephemeral || o.shot.is_some() {
         persist::READ_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
     }
-    let save = if o.shot.is_some() || o.ephemeral { demo_save() } else { persist::load() };
+    let mut save = if o.shot.is_some() || o.ephemeral { demo_save() } else { persist::load() };
+    save.gui_size = if o.gui > 0 { o.gui } else { save.gui_size };
     let seed = o.seed.unwrap_or_else(|| (macroquad::miniquad::date::now() * 1000.0) as i64);
     let mut game = boot(&base, save, seed).await;
     if o.audio_test {
