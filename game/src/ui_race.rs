@@ -2,6 +2,7 @@
 
 use crate::game::*;
 use crate::scene::{self, View};
+use crate::gfx::Spr;
 use crate::sprites as S;
 use drdriving_core::economy;
 use drdriving_core::mission::Mission;
@@ -23,7 +24,7 @@ impl Game {
         let g = &self.g;
         draw_texture_ex(
             &rt.texture,
-            g.ox + left * g.k,
+            g.sx(left, w, top, h),
             g.oy + top * g.k,
             WHITE,
             DrawTextureParams { dest_size: Some(vec2(w * g.k, h * g.k)), flip_y: true, ..Default::default() },
@@ -42,7 +43,7 @@ impl Game {
         let (cw, w) = (400.0, &self.world);
         let g = &mut self.g;
         let ui = &self.a.ui;
-        g.e(ui, S::UI[19], cw, sh - 35.0, cw, 35.0);
+        g.e(ui, S::UI[19], cw, sh - 35.0, g.vw / 2.0, 35.0);
         // (render_gold above is drawn first so the bar sits underneath the pads but over the scene)
         let m = w.mission.index();
         g.h(ui, S::mission_icon(m), 306.0, sh - 35.0);
@@ -156,6 +157,15 @@ impl Game {
         if cam4 && matches!(mode, 2 | 3 | 4) {
             let tex = &self.a.interior[w.player.kind];
             g.h(tex, S::INTERIOR[0], cw, sh - 56.0);
+            if g.shift > 0.5 {
+                // extend the dashboard to the screen edges with its outermost columns
+                let d = S::INTERIOR[0];
+                let top = (sh - 56.0) - d.h / 2.0;
+                g.pin.set(Some(0.0));
+                g.blit(tex, Spr { x: d.x, y: d.y, w: 6.0, h: d.h }, 0.0, top, g.shift + 1.0, d.h, false, 0.0);
+                g.blit(tex, Spr { x: d.x + d.w - 6.0, y: d.y, w: 6.0, h: d.h }, 800.0 + g.shift - 1.0, top, g.shift + 1.0, d.h, false, 0.0);
+                g.pin.set(None);
+            }
             let sp_ = w.speed * (if yard { 0.6213 } else { 1.0 }) * 4.86 + 45.0;
             g.f(ui, S::INTERIOR[1], cw - 139.0, sh - 52.0, sp_);
             g.f(ui, S::INTERIOR[1], cw + 134.0, sh - 52.0, 315.0 - (w.gas_left / w.gas_initial) * 88.0);
@@ -207,9 +217,12 @@ impl Game {
                 g.h(ui, S::TURN[self.effect_turn.rate as usize], self.effect_turn.x, f5 + self.effect_turn.y);
             }
             if w.sub_mission_lane >= 0 && !w.parking.active {
+                // box and marker must share one anchor offset or the marker drifts out of the box
+                g.pin.set(Some(g.off(600.0, 40.0)));
                 g.h(ui, S::NAVI[3], 600.0, 40.0);
                 let off = (if rd { -1.0 } else { 1.0 }) * 60.0 * (w.sub_mission_lane - 1) as f32 + 600.0;
                 g.h(ui, S::NAVI[4], off, 40.0);
+                g.pin.set(None);
             }
             let t = ((18000.0 - w.travel_time * 100.0) as i32).max(0);
             let (min, rest) = (t / 6000, t % 6000);
@@ -292,9 +305,9 @@ impl Game {
         let a = self.mode_time.min(0.3);
         let g = &mut self.g;
         g.set_tint(Color::new(1.0, 1.0, 1.0, a));
-        g.e(&self.a.ui, S::BLACK, cw, ch, cw, ch);
+        g.e(&self.a.ui, S::BLACK, cw, ch, g.vw / 2.0, ch);
         g.clear_tint();
-        g.e(&self.a.ui, S::BLACK, cw, sh - 35.0, cw, 35.0);
+        g.e(&self.a.ui, S::BLACK, cw, sh - 35.0, g.vw / 2.0, 35.0);
         self.render_gold(0, 0);
         if ((self.mode_time * 2.0) as i32) % 3 != 0 {
             self.bf.c(&self.g, &self.a.ui, "Game Paused", cw, sh - 35.0);
@@ -316,7 +329,7 @@ impl Game {
         for i in 0..4 {
             g.e(ui, S::UI[5], 400.0, f7 + 30.0 * i as f32, 1.0, 0.84);
         }
-        g.e(ui, S::UI[19], cw, sh - 35.0, cw, 35.0);
+        g.e(ui, S::UI[19], cw, sh - 35.0, g.vw / 2.0, 35.0);
         let r = &self.result;
         self.bf.d(g, ui, if r.new_record { "New Record!" } else { "Mission Success" }, cw, sh - 35.0, 1.2);
         self.bf.b(g, ui, "Last Record", 280.0, f7, 0.75);
@@ -363,9 +376,9 @@ impl Game {
         }
         let g = &mut self.g;
         g.set_tint(Color::new(1.0, 1.0, 1.0, f3));
-        g.e(&self.a.ui, S::BLACK, cw, ch, cw, ch);
+        g.e(&self.a.ui, S::BLACK, cw, ch, g.vw / 2.0, ch);
         g.clear_tint();
-        g.e(&self.a.ui, S::UI[19], cw, sh - 35.0, cw, 35.0);
+        g.e(&self.a.ui, S::UI[19], cw, sh - 35.0, g.vw / 2.0, 35.0);
         self.render_gold(0, 0);
         if self.mode_time > 1.2 {
             self.bf.d(&self.g, &self.a.ui, "Mission Failed", cw, sh - 35.0, 1.2);
@@ -376,6 +389,7 @@ impl Game {
     // ------------------------------------------------------------------ dispatch
 
     pub fn draw(&mut self) {
+        self.set_anchor();
         self.g.layout();
         clear_background(BLACKISH);
         match self.mode {
@@ -430,7 +444,7 @@ impl Game {
         let g = &mut self.g;
         let sh = g.sh;
         g.set_tint(Color::new(1.0, 1.0, 1.0, 0.8));
-        g.e(&self.a.ui, S::BLACK, 400.0, sh / 2.0, 400.0, sh / 2.0);
+        g.e(&self.a.ui, S::BLACK, 400.0, sh / 2.0, g.vw / 2.0, sh / 2.0);
         g.clear_tint();
         let lines = [
             "KEYBOARD",

@@ -166,7 +166,7 @@ impl Game {
 
     pub fn process_tab_option(&mut self) {
         self.fling_decay();
-        if let Some(i) = self.scroll_tap(1, -130.0, 360.0) {
+        if let Some(i) = self.scroll_tap(1, -130.0, 570.0) {
             let s = &mut self.save;
             match i {
                 0 => s.music_disabled = !s.music_disabled,
@@ -191,11 +191,16 @@ impl Game {
                 }
                 4 => s.right_driver = !s.right_driver,
                 5 => s.show_yard = !s.show_yard,
+                6 => {
+                    s.gui_size = (s.gui_size + 1) % 3;
+                    self.g.scale = crate::gfx::Gfx::scale_for(s.gui_size);
+                    self.last_sh = 0.0;
+                }
                 _ => return,
             }
             self.persist();
         }
-        self.scroll_drag(1, -130.0, 360.0);
+        self.scroll_drag(1, -130.0, 570.0);
     }
 
     pub fn process_tab_profile(&mut self) {
@@ -261,8 +266,11 @@ impl Game {
     pub fn render_background(&mut self, mode: i32) {
         let g = &self.g;
         let sh = g.sh;
-        g.h(&self.a.background, S::BACKGROUND, g.cw(), sh - 320.0);
-        g.h(&self.a.menu, S::MENU[3], 262.0, sh - 12.0);
+        let c = (g.vw / 800.0).max(sh / 640.0).max(1.0);
+        g.e(&self.a.background, S::BACKGROUND, g.cw(), sh - 320.0 * c, c, c);
+        g.pin.set(Some(0.0));
+        g.d(&self.a.menu, S::MENU[3], 0.0, sh - 12.0, g.vw / 524.0, 1.0, 1);
+        g.pin.set(None);
         let (idx, x) = match mode {
             8 => (4, 50.0),
             9 => (5, 150.0),
@@ -317,8 +325,8 @@ impl Game {
         let cw = 400.0;
         let g = &self.g;
         let m = &self.a.menu;
-        g.e(m, S::MENU[11], cw, (f3 - 86.0) + 14.0, 8.0, 0.5);
-        g.e(m, S::MENU[11], cw, (86.0 + f3) - 14.0, 8.0, 0.5);
+        g.e(m, S::MENU[11], cw, (f3 - 86.0) + 14.0, g.vw / 100.0, 0.5);
+        g.e(m, S::MENU[11], cw, (86.0 + f3) - 14.0, g.vw / 100.0, 0.5);
         let f6 = ((sh / 2.0) * 0.1 + 15.0).clamp(25.0, 50.0);
         let (f7, f8) = (f4 - f6, f4 + f6);
         for y in [f7, f4, f8] {
@@ -376,10 +384,10 @@ impl Game {
         let info = car(c);
         for i in -4..10i32 {
             let f10 = Self::card_x(f9, i);
-            if f10 < -100.0 {
+            if f10 < -100.0 - g.shift {
                 continue;
             }
-            if f10 > 1010.0 {
+            if f10 > 1010.0 + g.shift {
                 break;
             }
             g.h(m, S::MENU[2], f10 - 8.0, y);
@@ -412,12 +420,12 @@ impl Game {
                 g.clear_tint();
             }
         }
-        g.e(m, S::MENU[11], 400.0, (y - 86.0) + 14.0, 8.0, 0.5);
-        g.e(m, S::MENU[11], 400.0, (y + 86.0) - 14.0, 8.0, 0.5);
+        g.e(m, S::MENU[11], 400.0, (y - 86.0) + 14.0, g.vw / 100.0, 0.5);
+        g.e(m, S::MENU[11], 400.0, (y + 86.0) - 14.0, g.vw / 100.0, 0.5);
         for i in 0..6i32 {
             let f15 = Self::card_x(f9, i);
-            if f15 >= -100.0 {
-                if f15 > 1010.0 {
+            if f15 >= -100.0 - g.shift {
+                if f15 > 1010.0 + g.shift {
                     break;
                 }
                 self.text.e(g, ABILITY_NAMES[i as usize], f15 - 92.0, y - 62.0, 1, 18.0, 64.0);
@@ -435,10 +443,10 @@ impl Game {
             [(54, "200 Coin"), (56, "600 Coin"), (58, "1500 Coin"), (55, "200 Gold"), (57, "600 Gold"), (59, "1500 Gold")];
         for i in -4..6i32 {
             let f5 = Self::card_x(f4, i);
-            if f5 < -100.0 {
+            if f5 < -100.0 - g.shift {
                 continue;
             }
-            if f5 > 1010.0 {
+            if f5 > 1010.0 + g.shift {
                 break;
             }
             g.h(m, S::MENU[2], f5 - 8.0, y);
@@ -450,13 +458,13 @@ impl Game {
                 self.bfb.d(g, m, txt, f5 - 6.0, y - 59.0, 0.7);
             }
         }
-        g.e(m, S::MENU[11], 400.0, (y - 86.0) + 14.0, 8.0, 0.5);
-        g.e(m, S::MENU[11], 400.0, (y + 86.0) - 14.0, 8.0, 0.5);
+        g.e(m, S::MENU[11], 400.0, (y - 86.0) + 14.0, g.vw / 100.0, 0.5);
+        g.e(m, S::MENU[11], 400.0, (y + 86.0) - 14.0, g.vw / 100.0, 0.5);
         let labels = ["2 Gold", "5 Gold", "10 Gold", "", "", ""];
         for i in 0..6i32 {
             let f9 = Self::card_x(f4, i);
-            if f9 >= -100.0 {
-                if f9 > 1010.0 {
+            if f9 >= -100.0 - g.shift {
+                if f9 > 1010.0 + g.shift {
                     break;
                 }
                 self.text.e(g, labels[i as usize], f9 - 14.0, (y + 72.0) - 14.0, 0, 21.0, 100.0);
@@ -474,14 +482,14 @@ impl Game {
         let sh = g.sh;
         for i in -4..12i32 {
             let f4 = Self::card_x(f3, i);
-            if f4 < -100.0 {
+            if f4 < -100.0 - g.shift {
                 continue;
             }
-            if f4 > 1010.0 {
+            if f4 > 1010.0 + g.shift {
                 break;
             }
             g.h(m, S::MENU[2], f4 - 8.0, y);
-            if i > -1 && i < 6 {
+            if i > -1 && i < 7 {
                 g.h(m, S::MENU[41], (f4 - 20.5) + 5.0, (y + 72.0) - 14.0);
             }
             let (lab_y, lab_x) = ((y + 72.0) - 14.0, f4 - 18.0);
@@ -533,11 +541,16 @@ impl Game {
                     g.h(m, S::MENU[if s.show_yard { 22 } else { 21 }], f8 - 8.0, lab_y);
                     g.h(m, S::MENU[if s.show_yard { 21 } else { 22 }], f8 + 8.0, lab_y);
                 }
+                6 => {
+                    let name = ["Large", "Medium", "Small"][s.gui_size.clamp(0, 2) as usize];
+                    self.bfb.c(g, m, "GUI Size", f4, y - 12.0);
+                    self.bfb.d(g, m, name, lab_x, lab_y, 0.75);
+                }
                 _ => {}
             }
         }
-        g.e(m, S::MENU[11], 400.0, (y - 86.0) + 14.0, 8.0, 0.5);
-        g.e(m, S::MENU[11], 400.0, (y + 86.0) - 14.0, 8.0, 0.5);
+        g.e(m, S::MENU[11], 400.0, (y - 86.0) + 14.0, g.vw / 100.0, 0.5);
+        g.e(m, S::MENU[11], 400.0, (y + 86.0) - 14.0, g.vw / 100.0, 0.5);
         g.set_tint(COLOR_GREEN);
         self.bfb.d(g, m, "Designer / Programmer", 400.0 - 140.0, (sh * 0.68) - 14.0, 0.75);
         self.bfb.d(g, m, "Graphic Artists", 400.0 - 140.0, (sh * 0.72) + 14.0, 0.75);
@@ -580,6 +593,7 @@ impl Game {
     }
 
     pub fn render_dialog(&mut self) {
+        self.g.lthr = 360.0;
         match self.last_mode {
             9 => self.render_tab_cargo(),
             10 => self.render_tab_store(),
@@ -588,10 +602,11 @@ impl Game {
             _ => {}
         }
         self.render_screen_pad(true);
+        self.g.lthr = 250.0;
         let (cw, ch) = (400.0, self.g.sh / 2.0);
         let g = &mut self.g;
         g.set_tint(Color::new(1.0, 1.0, 1.0, 0.4));
-        g.e(&self.a.ui, S::BLACK, cw, ch, cw, ch);
+        g.e(&self.a.ui, S::BLACK, cw, ch, g.vw / 2.0, ch);
         g.clear_tint();
         let f7 = ((self.mode_time * 2.0) + 0.6).clamp(0.6, 1.0);
         g.e(&self.a.ui, S::BLACK, cw, ch, f7 * 400.0, f7 * 80.0);
@@ -604,6 +619,7 @@ impl Game {
     }
 
     pub fn render_exit(&mut self) {
+        self.g.lthr = 360.0;
         match self.last_mode {
             8 => self.render_tab_profile(),
             9 => self.render_tab_cargo(),
@@ -612,11 +628,12 @@ impl Game {
             _ => {}
         }
         self.render_screen_pad(true);
+        self.g.lthr = 250.0;
         let (cw, ch, sh) = (400.0, self.g.sh / 2.0, self.g.sh);
         let g = &mut self.g;
         let f3 = (self.mode_time * 5.0).min(0.85);
         g.set_tint(Color::new(f3, f3, f3, f3));
-        g.e(&self.a.ui, S::BLACK, cw, ch, cw, ch);
+        g.e(&self.a.ui, S::BLACK, cw, ch, g.vw / 2.0, ch);
         g.clear_tint();
         self.text.d(g, "Are you sure to exit?", cw, sh * 0.3, 0, 27.0);
         self.render_screen_pad(false);
