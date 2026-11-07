@@ -1,6 +1,14 @@
 ### Dr Driving PC
 a port of dr driving made to run on machines other than android.
 
+
+### Installation
+download the binaries for your operating system from the [releases](https://github.com/KrishnaSSH/drdriving-pc/releases/latest) 
+
+### Build from Source
+make sure your system has rust toolchain installed
+you can install it from [rustup.rs](https://rustup.rs)
+
 ```
 cargo run --release -p drdriving
 ```
