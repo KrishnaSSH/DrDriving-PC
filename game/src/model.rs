@@ -54,6 +54,26 @@ impl Model {
         Model { pos, uv }
     }
 
+    /// UV bounding box (u0, v0, u1, v1, in 0..1 image space, top-down) of the flat shadow quad baked
+    /// into car models: the triangles lying on the model's lowest plane.
+    pub fn shadow_uv_rect(&self) -> Option<[f32; 4]> {
+        let min_y = self.pos.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+        let mut r: Option<[f32; 4]> = None;
+        for t in 0..self.pos.len() / 3 {
+            if (0..3).all(|k| (self.pos[t * 3 + k][1] - min_y).abs() < 1e-3) {
+                for k in 0..3 {
+                    let uv = self.uv[t * 3 + k];
+                    let b = r.get_or_insert([uv[0], uv[1], uv[0], uv[1]]);
+                    b[0] = b[0].min(uv[0]);
+                    b[1] = b[1].min(uv[1]);
+                    b[2] = b[2].max(uv[0]);
+                    b[3] = b[3].max(uv[1]);
+                }
+            }
+        }
+        r
+    }
+
     pub fn load(path: &std::path::Path) -> Model {
         let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
         Self::parse(&text)

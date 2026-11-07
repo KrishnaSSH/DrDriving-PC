@@ -76,6 +76,37 @@ async fn texture(base: &str, rel: &str, repeat: bool, mip: bool) -> Texture2D {
     t
 }
 
+/// Car texture whose baked shadow silhouette (opaque, near-black, hard edged) is turned into a soft
+/// translucent shadow: alpha follows how dark each texel is, capped at ~45%.
+async fn car_texture(base: &str, rel: &str, shadow: Option<[f32; 4]>) -> Texture2D {
+    let b = bytes(base, rel).await;
+    let mut img = Image::from_file_with_format(&b, None).unwrap_or_else(|e| panic!("bad image {rel}: {e}"));
+    if let Some([u0, v0, u1, v1]) = shadow {
+        let (iw, ih) = (img.width as usize, img.height as usize);
+        let (w, h) = (iw as f32, ih as f32);
+        let (x0, x1) = ((u0 * w).floor() as usize, ((u1 * w).ceil() as usize).min(iw));
+        let (y0, y1) = ((v0 * h).floor() as usize, ((v1 * h).ceil() as usize).min(ih));
+        const PAD: usize = 2;
+        for y in y0.saturating_sub(PAD)..(y1 + PAD).min(ih) {
+            for x in x0.saturating_sub(PAD)..(x1 + PAD).min(iw) {
+                let inside = (y0..y1).contains(&y) && (x0..x1).contains(&x);
+                let px = &mut img.bytes[(y * iw + x) * 4..][..4];
+                if px[3] == 0 {
+                    // keep transparent texels black so filtering can't pull in a light fringe
+                    px.copy_from_slice(&[0, 0, 0, 0]);
+                } else if inside {
+                    let lum = (px[0] as f32 + px[1] as f32 + px[2] as f32) / 3.0;
+                    let a = ((200.0 - lum) / 200.0).clamp(0.0, 1.0) * 0.45;
+                    px.copy_from_slice(&[0, 0, 0, (a * 255.0) as u8]);
+                }
+            }
+        }
+    }
+    let t = Texture2D::from_image(&img);
+    t.set_filter(FilterMode::Linear);
+    t
+}
+
 async fn model(base: &str, rel: &str) -> Model {
     let b = bytes(base, rel).await;
     Model::parse(&String::from_utf8_lossy(&b))
@@ -136,9 +167,10 @@ pub async fn load(base: &str, progress: &mut dyn FnMut(usize, usize, &Texture2D,
     let mut car_model = Vec::new();
     let mut light_model = Vec::new();
     for i in 0..30 {
-        car_tex.push(texture(base, &car_png(i), false, true).await);
+        let cm = model(base, &car_obj(i)).await;
+        car_tex.push(car_texture(base, &car_png(i), cm.shadow_uv_rect()).await);
         interior_tex.push(texture(base, &interior(i), false, false).await);
-        car_model.push(model(base, &car_obj(i)).await);
+        car_model.push(cm);
         light_model.push(model(base, &light_obj(i)).await);
         step!();
     }
