@@ -21,13 +21,26 @@ pub struct Gfx {
     /// virtual height (g_fSH)
     pub sh: f32,
     pub tint: Color,
+    /// GUI size factor (1.0 = fill the window); the layout is shrunk and centred below 1.
+    pub scale: f32,
+    /// virtual width (800 * scale) and the extra width on each side of the 800 design area
+    pub vw: f32,
+    pub shift: f32,
+    /// race screens: left/right HUD elements hug the screen edges instead of being centred
+    pub anchor: bool,
+    /// virtual y band (menu card strip) whose contents are never edge-anchored
+    pub band: (f32, f32),
+    /// offset pinned for the glyphs of one string so it never splits across anchor regions
+    pub pin: std::cell::Cell<Option<f32>>,
+    /// design-space x below which anchored elements hug the left edge (above 550 = right edge)
+    pub lthr: f32,
     /// pixel rectangle of the layout area inside the window (logical px)
     pub vp: (f32, f32, f32, f32),
 }
 
 impl Gfx {
     pub fn new() -> Gfx {
-        let mut g = Gfx { k: 1.0, ox: 0.0, oy: 0.0, sh: 450.0, tint: WHITE, vp: (0.0, 0.0, 800.0, 450.0) };
+        let mut g = Gfx { k: 1.0, ox: 0.0, oy: 0.0, sh: 450.0, tint: WHITE, scale: 1.0, vw: 800.0, shift: 0.0, anchor: false, band: (0.0, 0.0), pin: std::cell::Cell::new(None), lthr: 250.0, vp: (0.0, 0.0, 800.0, 450.0) };
         g.layout();
         g
     }
@@ -35,11 +48,44 @@ impl Gfx {
     pub fn layout(&mut self) {
         let (sw, sh) = (screen_width(), screen_height());
         let (vw, vh) = if sw / sh >= 4.0 / 3.0 { (sw, sh) } else { (sw, sw * 0.75) };
-        self.k = vw / 800.0;
+        let _ = vw;
+        self.vw = 800.0 * self.scale;
+        self.shift = (self.vw - 800.0) / 2.0;
+        self.k = vw / self.vw;
         self.ox = 0.0;
         self.oy = (sh - vh) / 2.0;
         self.sh = vh / self.k;
         self.vp = (0.0, self.oy, vw, vh);
+    }
+
+    /// x offset (virtual units) applied to an element whose design-space centre is (`cx`, `cy`).
+    pub fn off(&self, cx: f32, cy: f32) -> f32 {
+        if let Some(p) = self.pin.get() {
+            return p;
+        }
+        if !self.anchor || (cy > self.band.0 && cy < self.band.1) {
+            self.shift
+        } else if cx < self.lthr {
+            0.0
+        } else if cx > 550.0 {
+            2.0 * self.shift
+        } else {
+            self.shift
+        }
+    }
+
+    /// Design-space rectangle -> window x of its left edge (logical px).
+    pub fn sx(&self, left: f32, w: f32, top: f32, h: f32) -> f32 {
+        self.ox + (left + self.off(left + w / 2.0, top + h / 2.0)) * self.k
+    }
+
+    /// Layout scale for a saved GUI size (0 = large, 1 = medium, 2 = small).
+    pub fn scale_for(size: i32) -> f32 {
+        match size {
+            1 => 1.25,
+            2 => 1.5,
+            _ => 1.0,
+        }
     }
 
     /// virtual centre helpers (g_fCW, g_fCH)
@@ -52,7 +98,18 @@ impl Gfx {
 
     /// Pointer position in the window (logical px) -> virtual coordinates.
     pub fn to_virtual(&self, px: f32, py: f32) -> (f32, f32) {
-        ((px - self.ox) / self.k, (py - self.oy) / self.k)
+        let u = (px - self.ox) / self.k;
+        let y = (py - self.oy) / self.k;
+        let x = if !self.anchor || (y > self.band.0 && y < self.band.1) {
+            u - self.shift
+        } else if u < self.lthr + self.shift * 0.5 {
+            u
+        } else if u > 550.0 + self.shift * 1.5 {
+            u - 2.0 * self.shift
+        } else {
+            u - self.shift
+        };
+        (x, y)
     }
 
     /// Viewport for a 3D camera, in *physical* pixels with a bottom-left origin, expressed as
@@ -82,7 +139,7 @@ impl Gfx {
         let k = self.k;
         draw_texture_ex(
             tex,
-            self.ox + left * k,
+            self.sx(left, w, top, h),
             self.oy + top * k,
             self.tint,
             DrawTextureParams {
@@ -90,7 +147,7 @@ impl Gfx {
                 source: Some(Rect::new(s.x, s.y, s.w, s.h)),
                 rotation: rot.to_radians(),
                 flip_x,
-                pivot: Some(vec2(self.ox + (left + w / 2.0) * k, self.oy + (top + h / 2.0) * k)),
+                pivot: Some(vec2(self.sx(left, w, top, h) + w * k / 2.0, self.oy + (top + h / 2.0) * k)),
                 ..Default::default()
             },
         );
@@ -188,7 +245,19 @@ impl BFont {
     }
 
     /// `a`: left-aligned, unscaled, `y` is the vertical centre.
-    pub fn a(&self, g: &Gfx, tex: &Texture2D, s: &str, mut x: f32, y: f32) {
+    pub fn a(&self, g: &Gfx, tex: &Texture2D, s: &str, x: f32, y: f32) {
+        self.pin(g, s, x, y, 1.0);
+        self.a_raw(g, tex, s, x, y);
+        g.pin.set(None);
+    }
+
+    fn pin(&self, g: &Gfx, s: &str, x: f32, y: f32, sc: f32) {
+        let w: f32 = s.chars().map(|c| Self::idx(c).map_or(12.0, |i| self.glyph[i].1) * sc).sum();
+        g.pin.set(None);
+        g.pin.set(Some(g.off(x + w / 2.0, y)));
+    }
+
+    fn a_raw(&self, g: &Gfx, tex: &Texture2D, s: &str, mut x: f32, y: f32) {
         for c in s.chars() {
             let i = c as i32 - '!' as i32;
             let adv = if i >= 0 {
@@ -207,7 +276,13 @@ impl BFont {
     }
 
     /// `b`: left-aligned, scaled.
-    pub fn b(&self, g: &Gfx, tex: &Texture2D, s: &str, mut x: f32, y: f32, sc: f32) {
+    pub fn b(&self, g: &Gfx, tex: &Texture2D, s: &str, x: f32, y: f32, sc: f32) {
+        self.pin(g, s, x, y, sc);
+        self.b_raw(g, tex, s, x, y, sc);
+        g.pin.set(None);
+    }
+
+    fn b_raw(&self, g: &Gfx, tex: &Texture2D, s: &str, mut x: f32, y: f32, sc: f32) {
         for c in s.chars() {
             let i = c as i32 - '!' as i32;
             let adv = if i >= 0 {
@@ -320,7 +395,7 @@ impl GlText {
         let baseline = y + 0.3418 * size * shrink;
         draw_text_ex(
             s,
-            g.ox + left * g.k,
+            g.ox + (left + g.off(x, y)) * g.k,
             g.oy + baseline * g.k,
             TextParams { font: self.font.as_ref(), font_size: size_px as u16, color: g.tint, ..Default::default() },
         );

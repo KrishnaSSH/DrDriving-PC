@@ -121,8 +121,8 @@ fn camera(fov_deg: f32, near: f32, far: f32, pos: Vec3, target: Vec3, up: Vec3, 
 
 /// Full-layout viewport with the window's aspect (cams 0-3, ending, success, car select).
 fn with_full(mut cam: Camera3D, g: &Gfx) -> Camera3D {
-    cam.viewport = Some(g.viewport_px(0.0, 0.0, 800.0, g.sh));
-    cam.aspect = Some(800.0 / g.sh);
+    cam.viewport = Some(g.viewport_px(0.0, 0.0, g.vw, g.sh));
+    cam.aspect = Some(g.vw / g.sh);
     cam
 }
 
@@ -159,11 +159,11 @@ pub fn driver_view(w: &World, right_driver: bool, g: &Gfx) -> View {
     // the original lifts the 3D view W/8 above the bottom edge (the dashboard covers it) and, on
     // 16:9-ish screens, uses a fixed 1.47 aspect with a taller-than-screen viewport
     if g.sh >= 400.0 {
-        cam.viewport = Some(g.viewport_px(0.0, 100.0, 800.0, 800.0 * 17.0 / 25.0));
+        cam.viewport = Some(g.viewport_px(0.0, 100.0, g.vw, g.vw * 17.0 / 25.0));
         cam.aspect = Some(1.47);
     } else {
-        cam.viewport = Some(g.viewport_px(0.0, 100.0, 800.0, g.sh));
-        cam.aspect = Some(800.0 / g.sh);
+        cam.viewport = Some(g.viewport_px(0.0, 100.0, g.vw, g.sh));
+        cam.aspect = Some(g.vw / g.sh);
     }
     View { cam, radius: 0 }
 }
@@ -394,7 +394,7 @@ fn draw_characters(a: &Assets, w: &World, _mission: Mission) {
 /// the screen in an 800x500 viewport anchored at the bottom (taller than most screens).
 pub fn render_cur_car(a: &Assets, g: &Gfx, kind: usize) {
     let mut cam = camera(13.0, 4.0, 25.0, vec3(0.0, 5.0, 22.0), vec3(0.0, 1.5, 0.0), Vec3::Y, Some(1.6));
-    cam.viewport = Some(g.viewport_px(0.0, 0.0, 800.0, 500.0));
+    cam.viewport = Some(g.viewport_px(g.shift, 0.0, 800.0, 500.0));
     set_camera(&cam);
     gl_use_material(&a.mats.normal);
     let info = car(kind);

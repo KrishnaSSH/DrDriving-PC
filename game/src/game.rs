@@ -177,7 +177,7 @@ pub struct Game {
     mouse_down: bool,
     last_mouse: (f32, f32),
     drag_samples: Vec<(f32, f32)>,
-    last_sh: f32,
+    pub last_sh: f32,
     pub wheel_zoom: f32,
     pub clock: f32,
 }
@@ -250,6 +250,7 @@ impl Game {
         };
         game.render_coin = game.save.coin as f64;
         game.render_gold = game.save.gold as f64;
+        game.g.scale = Gfx::scale_for(game.save.gui_size);
         game.layout_pads();
         game.enter_mode(8);
         game
@@ -612,8 +613,19 @@ impl Game {
         persist::store(&self.save);
     }
 
+    /// Edge-anchor HUD / menu-corner elements on race and tab screens (see `Gfx::off`).
+    pub fn set_anchor(&mut self) {
+        let menu = matches!(self.mode, 8..=13);
+        self.g.anchor = menu || matches!(self.mode, 1..=6);
+        let y = self.g.sh * 0.35;
+        // dialogs sit on top of a tab: their own buttons (at 250/550) stay centred
+        self.g.lthr = if matches!(self.mode, 8..=11) { 360.0 } else { 250.0 };
+        self.g.band = if menu { (y - 88.0, y + 88.0) } else { (0.0, 0.0) };
+    }
+
     /// Advance one fixed 1/60 s step.
     pub fn update(&mut self, dt: f32) {
+        self.set_anchor();
         self.keys.tick(dt);
         self.clock += dt;
         self.dt = dt;
