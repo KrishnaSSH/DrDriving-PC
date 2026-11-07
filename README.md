@@ -7,7 +7,7 @@ cargo run --release -p drdriving
 
 ### Game data files
 
-### Linux
+##### Linux
 ```
 $XDG_DATA_HOME/drdriving/save.json
 ```
@@ -19,12 +19,12 @@ will use
 if that variable isn't set
 
 
-### Windows
+##### Windows
 ```
  %APPDATA%\drdriving\save.json
 ```
 
-### MacOS
+##### MacOS
 
 ```
 ~/Library/Application Support/drdriving/save.json
