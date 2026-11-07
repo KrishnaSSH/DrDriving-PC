@@ -25,7 +25,7 @@ pub struct SaveGame {
     pub right_driver: bool,
     pub accel_disabled: bool,
     pub show_yard: bool,
-    /// GUI size: 0 = large (fills the window, phone-like), 1 = medium, 2 = small (spacious).
+    /// GUI size: 0 = large (phone-like), 1 = medium, 2 = small (spacious, the default).
     pub gui_size: i32,
     pub rate_rewarded: bool,
 
@@ -85,7 +85,7 @@ impl Default for SaveGame {
             right_driver: false,
             accel_disabled: true,
             show_yard: false,
-            gui_size: 0,
+            gui_size: 2,
             rate_rewarded: false,
             driver_level: 0,
             driver_exp: 0,
@@ -245,7 +245,7 @@ impl SaveGame {
         self.right_driver = getb("bRightDriver")?;
         self.show_yard = getb("bShowYard")?;
         self.rate_rewarded = getb("bRateRewarded")?;
-        self.gui_size = o.get("iGuiSize").and_then(Value::as_i64).unwrap_or(0).clamp(0, 2) as i32;
+        self.gui_size = o.get("iGuiSize").and_then(Value::as_i64).unwrap_or(2).clamp(0, 2) as i32;
         self.driver_level = geti("iDriverLevel")?;
         self.driver_exp = geti("iDriverExp")?;
         self.wheel_sensitivity = geti("iWheelSensitivity")?;
