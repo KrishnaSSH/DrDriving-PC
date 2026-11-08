@@ -12,7 +12,6 @@ use crate::persist;
 use crate::scene::{DriftMark, DriftMarks};
 use drdriving_core::cars::{car, PLAYER_CARS, PURCHASABLE_CARS};
 use drdriving_core::economy::{self, Outcome, ShopError};
-use drdriving_core::mission::Mission;
 use drdriving_core::save::SaveGame;
 use drdriving_core::session::{CoinReason, Event, Input, Phase, Session};
 use drdriving_core::rtdb::Connection;
@@ -1430,8 +1429,4 @@ pub fn car_status(save: &SaveGame, c: usize) -> String {
     } else {
         format!("{}km left", save.car_rent[c] / 1000)
     }
-}
-
-pub fn mission_of(m: Mission) -> usize {
-    m.index()
 }

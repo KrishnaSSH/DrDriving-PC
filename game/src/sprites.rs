@@ -165,13 +165,11 @@ pub const ACCEL: Spr = s(232.0, 10.0, 52.0, 124.0);
 pub const BRAKE: Spr = s(294.0, 10.0, 60.0, 64.0);
 pub const CAMERA: Spr = s(939.0, 290.0, 64.0, 46.0);
 pub const COIN: Spr = s(90.0, 210.0, 34.0, 24.0);
-pub const GOLD: Spr = s(230.0, 210.0, 34.0, 24.0);
 pub const KMPH: Spr = s(650.0, 150.0, 32.0, 18.0);
 pub const MPH: Spr = s(620.0, 150.0, 26.0, 16.0);
 pub const BLINKER_L: Spr = s(680.0, 829.0, 42.0, 38.0);
 pub const BLINKER_R: Spr = s(726.0, 829.0, 42.0, 38.0);
 pub const EMERGENCY: Spr = s(684.0, 765.0, 28.0, 30.0);
-pub const AD_BALLOON: Spr = s(769.0, 175.0, 76.0, 76.0);
 pub const LOADING_WHITE: Spr = s(307.0, 937.0, 2.0, 2.0);
 pub const SUD: Spr = s(12.0, 775.0, 286.0, 170.0);
 

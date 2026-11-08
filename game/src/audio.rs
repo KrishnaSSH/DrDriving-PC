@@ -8,7 +8,7 @@
 //! All external-player work happens on a worker thread so the game loop never blocks on it.
 
 #[cfg(native_audio)]
-use macroquad::audio::{load_sound_from_bytes, play_sound, set_sound_volume, stop_sound, PlaySoundParams, Sound};
+use macroquad::audio::{play_sound, set_sound_volume, stop_sound, PlaySoundParams, Sound};
 #[cfg(not(target_arch = "wasm32"))]
 use std::{
     path::PathBuf,
@@ -239,7 +239,7 @@ impl Audio {
     }
 
     /// Change the volume of a running loop (only the built-in mixer supports this live).
-    #[allow(unused_variables)]
+    #[allow(unused_variables, irrefutable_let_patterns)]
     pub fn loop_volume(&mut self, s: Snd, vol: f32) {
         #[cfg(native_audio)]
         if let Backend::Native(v) = &self.backend {

@@ -86,6 +86,7 @@ async fn present_while<T: 'static + std::any::Any>(fut: impl std::future::Future
 }
 
 /// `load_sound_from_bytes` (on the web the decode takes several frames) without black flashes.
+#[cfg(native_audio)]
 pub async fn decode_sound(data: &[u8]) -> Result<macroquad::audio::Sound, macroquad::Error> {
     #[cfg(target_arch = "wasm32")]
     {

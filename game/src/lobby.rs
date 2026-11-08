@@ -86,7 +86,6 @@ pub struct Lobby {
     /// Both ratings when the current race began (the result screen counts them to the new values).
     pub rating_before: i32,
     pub opp_rating_before: i32,
-    bs_held: f32,
 }
 
 impl Default for Lobby {
@@ -116,7 +115,6 @@ impl Default for Lobby {
             search: None,
             rating_before: 0,
             opp_rating_before: 0,
-            bs_held: 0.0,
         }
     }
 }
@@ -958,7 +956,7 @@ impl Game {
         self.render_screen_pad(true);
         self.g.anchor = false;
         let (sh, cw) = (self.g.sh, 400.0);
-        let (top, bottom, y0, y1) = Self::pick_geometry(sh);
+        let (top, _bottom, y0, y1) = Self::pick_geometry(sh);
         let rows = self.pick_rows();
         let scroll = self.lobby.pick_scroll;
         let filter = self.lobby.pick_filter.clone();

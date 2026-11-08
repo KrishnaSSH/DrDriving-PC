@@ -3,7 +3,6 @@
 //! original's.
 
 use crate::game::*;
-use crate::pad::*;
 use crate::sprites as S;
 use drdriving_core::cars::car;
 use drdriving_core::economy;

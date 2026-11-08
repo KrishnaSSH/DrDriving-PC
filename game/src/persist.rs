@@ -28,6 +28,7 @@ pub fn save_path() -> std::path::PathBuf {
 }
 
 #[cfg(target_arch = "wasm32")]
+#[allow(dead_code)]
 pub fn save_path() -> String {
     "localStorage[drdriving.save]".to_string()
 }
