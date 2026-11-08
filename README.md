@@ -42,3 +42,9 @@ if that variable isn't set
 ```
 
 
+
+## Discord Rich Presence
+
+The desktop build shows what you are playing on Discord (menu screen, mission, car, block progress,
+fuel, online match and opponent). It works whenever the Discord desktop app is running. Set
+`DRDRIVING_NO_RPC=1` to turn it off. The web build does not use it.
