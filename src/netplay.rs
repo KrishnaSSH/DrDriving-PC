@@ -180,6 +180,8 @@ pub struct Match {
     read_count: i32,
     /// `mMultiPlayer`: pings and the silence timeout only run once the other side is known.
     active: bool,
+    /// Travel time of the newest position update applied (older ones that arrive late are dropped).
+    last_move_time: f32,
     idle: f32,
     since_send: f32,
 }
@@ -205,6 +207,7 @@ impl Match {
             send_count: 0,
             read_count: 0,
             active: false,
+            last_move_time: f32::NEG_INFINITY,
             idle: 0.0,
             since_send: 0.0,
         }
@@ -238,6 +241,18 @@ impl Match {
     /// True once the other player is known (a joiner from the claim, a creator from the first `S`).
     pub fn has_peer(&self) -> bool {
         self.active
+    }
+
+    /// Has anything at all arrived from the other side yet? A joiner that never hears back from the
+    /// room it claimed has hit an abandoned lobby.
+    pub fn heard(&self) -> bool {
+        self.read_count > 0
+    }
+
+    /// The transport did not send `n` queued messages (it kept only the newest position update):
+    /// they do not count towards the send throttle, which compares with what the peer received.
+    pub fn forget_sent(&mut self, n: i32) {
+        self.send_count = (self.send_count - n).max(0);
     }
 
     /// Everything queued for the peer since the last call.
@@ -285,6 +300,7 @@ impl Match {
         self.push(Message::course_from(&info));
         self.course = Some(info);
         self.stage = Stage::Racing;
+        self.last_move_time = f32::NEG_INFINITY;
         ev.push(Event::Course);
         ev.push(Event::StartRace);
     }
@@ -359,6 +375,7 @@ impl Match {
                             }
                             self.course = Some(info);
                             self.stage = Stage::Racing;
+                            self.last_move_time = f32::NEG_INFINITY;
                             ev.push(Event::Course);
                             ev.push(Event::StartRace);
                         }
@@ -368,7 +385,9 @@ impl Match {
             Message::Move { time, mission_distance, cx, cy, vx, vy, angle } => {
                 if self.stage == Stage::Racing {
                     let r = Remote { time, mission_distance, cx, cy, vx, vy, angle };
-                    if r.plausible() {
+                    // with several requests in flight an older position can arrive after a newer one
+                    if r.plausible() && time + 1.0e-4 >= self.last_move_time {
+                        self.last_move_time = time;
                         ev.push(Event::Opponent(r));
                     }
                 }

@@ -197,6 +197,8 @@ async fn screenshot(game: &mut Game, o: &Opts, path: &str) {
             game.enter_mode(8);
             game.lobby.channel_text = "427".into();
             game.enter_lobby();
+            // typing replaces the selected text, like in an address bar; letters are rejected
+            game.lobby.injected.extend("98x1".chars());
         }
         "name" => {
             game.enter_mode(11);

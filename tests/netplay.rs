@@ -367,12 +367,16 @@ fn two_claimants_one_lobby_exactly_one_wins() {
     assert_eq!(db.read("Waiting").as_object().unwrap().len(), 1);
 }
 
+fn fresh_key(offset_ms: u64, seed: i64) -> String {
+    drdriving_core::rtdb::push_id(NOW + offset_ms, &mut drdriving_core::rng::JavaRandom::new(seed))
+}
+
 #[test]
-fn a_stale_lobby_is_skipped() {
-    // a lobby whose room is already gone (its creator crashed): claiming it finds no room, and
-    // the joiner carries on searching instead of getting stuck
+fn a_lobby_whose_room_is_gone_is_detected() {
+    // a recent-looking lobby whose room was deleted: claiming it finds no room, and the claim
+    // cleans the lobby up
     let db = MemDb::new();
-    db.write("Waiting/-Nstale0000000000000", json!({"channel": 0, "status": 0, "room": "-Ngone"}));
+    db.write(&format!("Waiting/{}", fresh_key(0, 1)), json!({"channel": 0, "status": 0, "room": "-Ngone"}));
     let mut b = conn(&db, 0, "B", 5);
     let mut seen_closed = false;
     for _ in 0..800 {
@@ -380,6 +384,107 @@ fn a_stale_lobby_is_skipped() {
     }
     assert!(seen_closed, "the dead room is detected through the missing Live node");
     assert!(db.read("Waiting").is_null(), "and the stale lobby is cleaned up by the claim");
+}
+
+#[test]
+fn ghost_lobbies_are_ignored_by_age() {
+    // lobbies of players who quit long ago are not worth claiming: the search opens its own lobby
+    let db = MemDb::new();
+    let old = drdriving_core::rtdb::push_id(NOW - 3_600_000, &mut drdriving_core::rng::JavaRandom::new(3));
+    db.write(&format!("Waiting/{old}"), json!({"channel": 0, "status": 0, "room": "-Nghost"}));
+    db.write("Gaming/-Nghost", json!({"Live": "20260101000000"}));
+    let mut b = conn(&db, 0, "B", 5);
+    assert!(run(&mut [&mut b], |c| c[0].status() == Status::Waiting, 300), "it waits in its own lobby");
+    assert_eq!(db.read("Waiting").as_object().unwrap().len(), 2, "the ghost entry is left alone");
+    assert!(!db.read("Gaming/-Nghost").is_null());
+}
+
+#[test]
+fn the_newest_lobby_is_chosen_first() {
+    let db = MemDb::new();
+    let (k_old, k_new) = (fresh_key(0, 1), fresh_key(500, 2));
+    db.write(&format!("Waiting/{k_old}"), json!({"channel": 0, "status": 0, "room": "-Nold"}));
+    db.write(&format!("Waiting/{k_new}"), json!({"channel": 0, "status": 0, "room": "-Nnew"}));
+    db.write("Gaming/-Nold", json!({"Live": "20261108120000"}));
+    db.write("Gaming/-Nnew", json!({"Live": "20261108120001"}));
+    let mut b = conn(&db, 0, "B", 5);
+    run(&mut [&mut b], |_| false, 200);
+    assert_eq!(db.read(&format!("Waiting/{k_old}/status")), 0, "the older lobby is untouched");
+    assert!(db.read(&format!("Waiting/{k_new}")).is_null(), "the newest was claimed (and removed)");
+}
+
+#[test]
+fn an_unanswered_room_is_abandoned_and_the_next_lobby_tried() {
+    let db = MemDb::new();
+    let mut a = conn(&db, 0, "Alice", 11);
+    assert!(run(&mut [&mut a], |c| c[0].status() == Status::Waiting, 200));
+    // a newer lobby whose creator vanished without a trace (the room is there, nobody answers)
+    db.write(&format!("Waiting/{}", fresh_key(2_000, 9)), json!({"channel": 0, "status": 0, "room": "-Nghost"}));
+    db.write("Gaming/-Nghost", json!({"Live": "20261108120000"}));
+    let mut b = conn(&db, 0, "Bob", 22);
+    assert!(run(&mut [&mut a, &mut b], |c| racing(c[0]) && racing(c[1]), 3000), "after giving up on the ghost, B reaches A");
+    assert_eq!(b.m.peer.as_ref().unwrap().name, "Alice");
+    assert!(db.read("Gaming/-Nghost").is_null(), "the abandoned room is cleared away");
+}
+
+#[test]
+fn two_players_who_search_at_the_same_moment_still_meet() {
+    // each finds nothing and opens a lobby; the younger notices the older one and joins it
+    for seed in 0..6 {
+        let db = MemDb::new();
+        let mut a = conn(&db, 7, "A", seed);
+        let mut b = conn(&db, 7, "B", seed + 100);
+        assert!(run(&mut [&mut a, &mut b], |c| racing(c[0]) && racing(c[1]), 3000), "seed {seed}: they meet");
+        assert!(db.read("Waiting").is_null() || db.read("Waiting").as_object().map_or(true, |m| m.is_empty()), "no lobby left over");
+    }
+}
+
+#[test]
+fn a_long_race_is_never_throttled() {
+    // position updates are sent ~20 times a second but only the newest goes out; that must not make
+    // the send throttle think the peer fell behind, or the result message would be dropped
+    // with a 0.3 s round trip (the real database from far away) updates pile up between sends
+    let db = MemDb::new();
+    let slow = |name: &str, seed| Connection::new(Box::new(db.backend_with_latency(30)), 0, profile(name, 1), seed, NOW);
+    let mut a = slow("A", 1);
+    assert!(run(&mut [&mut a], |c| c[0].status() == Status::Waiting, 800));
+    let mut b = slow("B", 2);
+    assert!(run(&mut [&mut a, &mut b], |c| racing(c[0]) && racing(c[1]), 6000));
+    let mv = |x: f32| Remote { time: x, mission_distance: x, cx: x, cy: 0.0, vx: 1.0, vy: 0.0, angle: 0.0 };
+    let mut last_seen = 0.0f32;
+    for step in 0..9000 {
+        // 90 simulated seconds
+        if step % 5 == 0 {
+            a.m.send_move(mv(step as f32 / 100.0));
+            b.m.send_move(mv(step as f32 / 100.0));
+        }
+        a.pump(0.01);
+        for e in b.pump(0.01) {
+            if let Event::Opponent(r) = e {
+                last_seen = r.cx;
+            }
+        }
+    }
+    assert!(last_seen > 85.0, "updates kept flowing for the whole race: {last_seen}");
+    a.m.finish(true);
+    let mut got = false;
+    for _ in 0..1000 {
+        a.pump(0.01);
+        got |= b.pump(0.01).contains(&Event::OpponentFinished { opponent_won: true });
+    }
+    assert!(got, "the result still arrives after a long race");
+    assert!(!a.m.is_closed() && !b.m.is_closed(), "and nobody was timed out");
+}
+
+#[test]
+fn late_position_updates_are_ignored() {
+    let (mut c, mut j) = pair();
+    shuttle(&mut c, &mut j);
+    let mv = |t: f32| Message::Move { time: t, mission_distance: t, cx: t, cy: 0.0, vx: 0.0, vy: 0.0, angle: 0.0 };
+    assert_eq!(j.handle(mv(5.0)).len(), 1);
+    assert!(j.handle(mv(4.0)).is_empty(), "an older update that arrives late is dropped");
+    assert_eq!(j.handle(mv(5.0)).len(), 1);
+    assert_eq!(j.handle(mv(6.0)).len(), 1);
 }
 
 #[test]

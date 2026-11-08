@@ -39,9 +39,19 @@ pub const MOVE_EVERY: u32 = 3;
 
 /// Without a single successful request for this long the connection counts as lost.
 const NET_LOST: f32 = 10.0;
-/// Mailbox poll gap once the peer is known / while waiting for one in a lobby.
-const POLL_ACTIVE: f32 = 0.05;
-const POLL_LOBBY: f32 = 0.7;
+/// Gap between mailbox requests once the peer is known (two may be in flight, so updates are not
+/// limited to one per round trip) / while waiting for one in a lobby.
+const POLL_ACTIVE: f32 = 0.12;
+const POLL_LOBBY: f32 = 0.25;
+/// A joiner that hears nothing from the room it claimed for this long has hit an abandoned lobby
+/// (creators answer within a second or two) and moves on to the next one.
+const NO_ANSWER: f32 = 6.0;
+/// Lobbies older than this are ghosts of players who quit: nobody waits that long (the original
+/// gives up after 40 s). Measured with the local clock; if that is badly off the "no answer" rule
+/// above still protects.
+const LOBBY_MAX_AGE_MS: u64 = 120_000;
+/// A creator looks at the lobby list this often, to join a lobby opened a moment before its own.
+const RELIST_EVERY: f32 = 2.5;
 /// How often a room's `Live` node is looked at.
 const LIVE_EVERY: f32 = 2.0;
 /// Lost lobby claims in a row before giving up searching and opening a lobby ourselves.
@@ -125,19 +135,49 @@ fn mailbox_entries(v: &Value) -> Vec<(i64, String)> {
     out
 }
 
-/// First lobby on `channel` that is still open (`status == 0`), oldest first.
-fn pick_lobby(waiting: &Value, channel: i32, skip: &HashSet<String>) -> Option<(String, String)> {
-    for (key, e) in waiting.as_object()? {
-        let open = e.get("status").and_then(Value::as_f64) == Some(0.0);
-        let same = e.get("channel").and_then(Value::as_f64) == Some(channel as f64);
-        let room = e.get("room").and_then(Value::as_str);
-        if let (true, true, Some(room)) = (open, same, room) {
-            if !skip.contains(room) {
-                return Some((key.clone(), room.to_string()));
-            }
-        }
+/// Creation time (unix ms) encoded in the first 8 characters of a push id.
+fn push_time(key: &str) -> Option<u64> {
+    if key.len() < 8 {
+        return None;
     }
-    None
+    let mut t = 0u64;
+    for c in key.bytes().take(8) {
+        t = t * 64 + PUSH_CHARS.iter().position(|&x| x == c)? as u64;
+    }
+    Some(t)
+}
+
+/// Not older than [`LOBBY_MAX_AGE_MS`] (keys that are not push ids count as fresh).
+fn fresh(key: &str, now_ms: u64) -> bool {
+    push_time(key).map_or(true, |t| now_ms.saturating_sub(t) <= LOBBY_MAX_AGE_MS)
+}
+
+/// Open lobbies on `channel` as `(key, room)`, oldest first (push ids sort by time).
+fn open_lobbies(waiting: &Value, channel: i32, skip: &HashSet<String>) -> Vec<(String, String)> {
+    let Some(map) = waiting.as_object() else { return Vec::new() };
+    let mut out: Vec<(String, String)> = map
+        .iter()
+        .filter_map(|(key, e)| {
+            let open = e.get("status").and_then(Value::as_f64) == Some(0.0);
+            let same = e.get("channel").and_then(Value::as_f64) == Some(channel as f64);
+            let room = e.get("room").and_then(Value::as_str)?;
+            (open && same && !skip.contains(room)).then(|| (key.clone(), room.to_string()))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// The lobby to claim: the newest open one on our channel that is not a ghost. (The original takes
+/// the oldest, which is the likeliest to be abandoned.)
+fn pick_lobby(waiting: &Value, channel: i32, skip: &HashSet<String>, now_ms: u64) -> Option<(String, String)> {
+    open_lobbies(waiting, channel, skip).into_iter().rev().find(|(k, _)| fresh(k, now_ms))
+}
+
+/// For a waiting creator: an open, fresh lobby that was created before ours (two players who
+/// searched at the same moment each made a lobby; the younger one joins the older one).
+fn pick_older(waiting: &Value, channel: i32, mine: &str, skip: &HashSet<String>, now_ms: u64) -> Option<(String, String)> {
+    open_lobbies(waiting, channel, skip).into_iter().find(|(k, _)| k.as_str() < mine && fresh(k, now_ms))
 }
 
 fn http_error(status: u16) -> String {
@@ -175,7 +215,6 @@ enum Step {
 enum Resume {
     Listing,
     ClaimRead { lobby: String, room: String },
-    ClaimWrite { lobby: String, room: String },
     MakeRoom,
     PostLobby,
 }
@@ -192,10 +231,12 @@ const MAX_RETRIES: u32 = 6;
 struct Mail {
     pending: Vec<Message>,
     send_key: i64,
-    send_req: Option<(u64, Vec<(i64, String)>)>,
-    retry: Option<Vec<(i64, String)>>,
+    /// Writes in flight (at most two) with what they carry, and batches to send again.
+    sends: Vec<(u64, Vec<(i64, String)>)>,
+    retry: Vec<Vec<(i64, String)>>,
     send_due: f32,
-    msg_req: Option<u64>,
+    /// Mailbox reads in flight (at most two).
+    msgs: Vec<u64>,
     msg_due: f32,
     seen: HashSet<i64>,
     to_delete: Vec<i64>,
@@ -220,6 +261,13 @@ pub struct Connection {
     be: Box<dyn Backend>,
     pub m: Match,
     pub channel: i32,
+    profile: Profile,
+    seed: i64,
+    friendly: bool,
+    resets: i64,
+    joined_at: f32,
+    relist_req: Option<u64>,
+    relist_due: f32,
     clock: f32,
     unix_ms: u64,
     rng: JavaRandom,
@@ -245,8 +293,15 @@ impl Connection {
         let friendly = channel >= net::FIRST_FRIEND_CHANNEL;
         let mut c = Connection {
             be: backend,
-            m: Match::new(profile, seed, friendly),
+            m: Match::new(profile.clone(), seed, friendly),
             channel,
+            profile,
+            seed,
+            friendly,
+            resets: 0,
+            joined_at: 0.0,
+            relist_req: None,
+            relist_due: 0.0,
             clock: 0.0,
             unix_ms,
             rng: JavaRandom::new(seed ^ 0x5DEE_CE66),
@@ -355,6 +410,7 @@ impl Connection {
         self.call(req(Method::Delete, format!("Waiting/{lobby}"), None));
         self.room = Some(room);
         self.m.joined();
+        self.joined_at = self.clock;
         self.last_ok = self.clock;
         self.mail.live_due = self.clock + LIVE_EVERY;
         Step::InRoom
@@ -368,7 +424,7 @@ impl Connection {
                     self.retry_or_fail(&r, Resume::Listing, ev)
                 } else {
                     let v: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
-                    match pick_lobby(&v, self.channel, &self.skipped) {
+                    match pick_lobby(&v, self.channel, &self.skipped, self.now_ms()) {
                         Some((lobby, room)) => {
                             let q = Request { want_etag: true, ..req(Method::Get, format!("Waiting/{lobby}/status"), None) };
                             Step::ClaimRead { req: self.stage_call(q), lobby, room }
@@ -422,13 +478,7 @@ impl Connection {
                     Step::InRoom
                 }
             }
-            Step::InRoom => {
-                if self.mail_response(id, r, ev) {
-                    Step::Dead
-                } else {
-                    Step::InRoom
-                }
-            }
+            Step::InRoom => self.mail_response(id, r, ev).unwrap_or(Step::InRoom),
             other => other, // an answer to something fire-and-forget
         };
     }
@@ -443,15 +493,48 @@ impl Connection {
         if self.m.role == crate::netplay::Role::Creator { "ToJoiner" } else { "ToCreator" }
     }
 
-    /// Handle the answer to a mailbox request. Returns true when it ended the connection.
-    fn mail_response(&mut self, id: u64, r: Response, ev: &mut Vec<NetEvent>) -> bool {
+    /// Start over with a fresh match (after giving up a lobby).
+    fn reset_match(&mut self) {
+        self.resets += 1;
+        self.m = Match::new(self.profile.clone(), self.seed.wrapping_add(self.resets), self.friendly);
+        self.mail = Mail::default();
+        self.relist_req = None;
+        self.relist_due = self.clock + RELIST_EVERY;
+    }
+
+    /// Leave our own lobby / room (not the connection) and claim someone else's lobby instead.
+    fn merge_into(&mut self, lobby: String, room: String) -> Step {
+        if let Some(l) = self.lobby.take() {
+            self.call(req(Method::Delete, format!("Waiting/{l}"), None));
+        }
+        if let Some(r) = self.room.take() {
+            self.call(req(Method::Delete, format!("Gaming/{r}"), None));
+        }
+        self.reset_match();
+        let q = Request { want_etag: true, ..req(Method::Get, format!("Waiting/{lobby}/status"), None) };
+        Step::ClaimRead { req: self.stage_call(q), lobby, room }
+    }
+
+    /// The room we joined never answered: forget it (and clear it away) and look for another lobby.
+    fn abandon_room_and_search(&mut self) {
+        if let Some(r) = self.room.take() {
+            self.skipped.insert(r.clone());
+            self.call(req(Method::Delete, format!("Gaming/{r}"), None));
+        }
+        self.reset_match();
+        self.claim_losses = 0;
+        self.step = self.list();
+    }
+
+    /// Handle the answer to a mailbox request. `Some(step)` = the connection moved on (it ended, or
+    /// it switched to another lobby).
+    fn mail_response(&mut self, id: u64, r: Response, ev: &mut Vec<NetEvent>) -> Option<Step> {
         let fatal = matches!(r.status, 401 | 403);
         if r.ok() {
             self.last_ok = self.clock;
         }
-        if self.mail.msg_req == Some(id) {
-            self.mail.msg_req = None;
-            self.mail.msg_due = self.clock + if self.m.stage == Stage::Lobby { POLL_LOBBY } else { POLL_ACTIVE };
+        if let Some(pos) = self.mail.msgs.iter().position(|&q| q == id) {
+            self.mail.msgs.remove(pos);
             if r.ok() {
                 let v: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
                 for (n, text) in mailbox_entries(&v) {
@@ -465,8 +548,7 @@ impl Connection {
                     }
                 }
             } else if fatal {
-                self.fail(http_error(r.status), ev);
-                return true;
+                return Some(self.fail(http_error(r.status), ev));
             } else {
                 self.mail.msg_due = self.clock + 0.4;
             }
@@ -477,27 +559,35 @@ impl Connection {
                 // our room is gone: the other player left (or it never existed)
                 ev.extend(self.m.on_link_closed());
             } else if fatal {
-                self.fail(http_error(r.status), ev);
-                return true;
+                return Some(self.fail(http_error(r.status), ev));
             }
-        } else if self.mail.send_req.as_ref().map(|s| s.0) == Some(id) {
-            let (_, batch) = self.mail.send_req.take().unwrap();
+        } else if let Some(pos) = self.mail.sends.iter().position(|s| s.0 == id) {
+            let (_, batch) = self.mail.sends.remove(pos);
             if !r.ok() {
                 if fatal {
-                    self.fail(http_error(r.status), ev);
-                    return true;
-                } else {
-                    self.mail.retry = Some(batch);
-                    self.mail.send_due = self.clock + 0.25;
+                    return Some(self.fail(http_error(r.status), ev));
                 }
+                self.mail.retry.push(batch);
+                self.mail.send_due = self.clock + 0.25;
             }
         } else if self.mail.del_req.as_ref().map(|s| s.0) == Some(id) {
             let (_, keys) = self.mail.del_req.take().unwrap();
             if !r.ok() && !fatal {
                 self.mail.to_delete.extend(keys);
             }
+        } else if self.relist_req == Some(id) {
+            self.relist_req = None;
+            self.relist_due = self.clock + RELIST_EVERY;
+            if r.ok() && self.m.role == crate::netplay::Role::Creator && self.m.stage == Stage::Lobby {
+                if let Some(mine) = self.lobby.clone() {
+                    let v: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
+                    if let Some((lobby, room)) = pick_older(&v, self.channel, &mine, &self.skipped, self.now_ms()) {
+                        return Some(self.merge_into(lobby, room));
+                    }
+                }
+            }
         }
-        false
+        None
     }
 
     /// Hand the match's outgoing messages to the network and start whatever poll is due.
@@ -509,18 +599,21 @@ impl Connection {
         let out = self.m.take_outbox();
         self.mail.pending.extend(out);
 
-        if self.mail.send_req.is_none() && self.clock >= self.mail.send_due {
-            let batch = self.mail.retry.take().or_else(|| self.next_batch());
-            if let Some(batch) = batch {
-                let body: Map<String, Value> = batch.iter().map(|(k, t)| (k.to_string(), Value::String(t.clone()))).collect();
-                let path = format!("Gaming/{room}/{}", self.outbox());
-                let id = self.call(req(Method::Patch, path, Some(Value::Object(body).to_string())));
-                self.mail.send_req = Some((id, batch));
-            }
+        // writes: up to two in flight, so updates are not limited to one per round trip
+        while self.mail.sends.len() < 2 && self.clock >= self.mail.send_due {
+            let Some(batch) = self.mail.retry.pop().or_else(|| self.next_batch()) else { break };
+            let body: Map<String, Value> = batch.iter().map(|(k, t)| (k.to_string(), Value::String(t.clone()))).collect();
+            let path = format!("Gaming/{room}/{}", self.outbox());
+            let id = self.call(req(Method::Patch, path, Some(Value::Object(body).to_string())));
+            self.mail.sends.push((id, batch));
         }
-        if self.mail.msg_req.is_none() && self.clock >= self.mail.msg_due {
+        // reads of our mailbox: two overlapping ones once a race is on
+        let waiting = self.m.stage == Stage::Lobby;
+        let (max_reads, gap) = if waiting { (1, POLL_LOBBY) } else { (2, POLL_ACTIVE) };
+        if self.mail.msgs.len() < max_reads && self.clock >= self.mail.msg_due {
             let id = self.call(req(Method::Get, format!("Gaming/{room}/{}", self.inbox()), None));
-            self.mail.msg_req = Some(id);
+            self.mail.msgs.push(id);
+            self.mail.msg_due = self.clock + gap;
         }
         if self.mail.del_req.is_none() && !self.mail.to_delete.is_empty() {
             let keys = std::mem::take(&mut self.mail.to_delete);
@@ -531,6 +624,10 @@ impl Connection {
         if self.mail.live_req.is_none() && self.clock >= self.mail.live_due {
             let id = self.call(req(Method::Get, format!("Gaming/{room}/Live"), None));
             self.mail.live_req = Some(id);
+        }
+        // a creator that is still alone keeps an eye on the list of lobbies
+        if waiting && self.lobby.is_some() && self.relist_req.is_none() && self.clock >= self.relist_due {
+            self.relist_req = Some(self.call(req(Method::Get, "Waiting", None)));
         }
     }
 
@@ -543,12 +640,19 @@ impl Connection {
         let last_move = self.mail.pending.iter().rposition(|m| matches!(m, Message::Move { .. }));
         let pending = std::mem::take(&mut self.mail.pending);
         let mut batch = Vec::new();
+        let mut dropped = 0;
         for (i, m) in pending.iter().enumerate() {
             if matches!(m, Message::Move { .. }) && Some(i) != last_move {
+                dropped += 1;
                 continue;
             }
             batch.push((self.mail.send_key, m.encode()));
             self.mail.send_key += 1;
+        }
+        // updates that are never sent must not count as sent, or the send throttle (which compares
+        // with what the peer has received) would cut everything off after ~20 s of racing
+        if dropped > 0 {
+            self.m.forget_sent(dropped);
         }
         Some(batch)
     }
@@ -576,7 +680,6 @@ impl Connection {
                     self.step = match resume {
                         Resume::Listing => Step::Listing(id),
                         Resume::ClaimRead { lobby, room } => Step::ClaimRead { req: id, lobby, room },
-                        Resume::ClaimWrite { lobby, room } => Step::ClaimWrite { req: id, lobby, room },
                         Resume::MakeRoom => Step::MakeRoom(id),
                         Resume::PostLobby => Step::PostLobby(id),
                     };
@@ -585,11 +688,20 @@ impl Connection {
         }
         if matches!(self.step, Step::InRoom) {
             ev.extend(self.m.tick(dt));
-            if self.clock - self.last_ok > NET_LOST {
-                self.error = Some("Connection to the server lost".into());
-                ev.extend(self.m.on_link_closed());
+            if self.m.role == crate::netplay::Role::Joiner
+                && self.m.stage == Stage::Handshake
+                && !self.m.heard()
+                && self.clock - self.joined_at > NO_ANSWER
+            {
+                // nobody is home: an abandoned lobby. Try the next one.
+                self.abandon_room_and_search();
+            } else {
+                if self.clock - self.last_ok > NET_LOST {
+                    self.error = Some("Connection to the server lost".into());
+                    ev.extend(self.m.on_link_closed());
+                }
+                self.service();
             }
-            self.service();
         }
         if self.m.is_closed() {
             self.cleanup();
@@ -768,7 +880,13 @@ pub mod mem {
         }
 
         pub fn backend(&self) -> MemBackend {
-            MemBackend { db: self.clone(), next: 1, ready: Vec::new(), cut: Arc::new(AtomicBool::new(false)) }
+            self.backend_with_latency(0)
+        }
+
+        /// A backend whose answers arrive `polls` calls of [`Backend::poll`] late (a round trip),
+        /// like a real network; writes still take effect at once.
+        pub fn backend_with_latency(&self, polls: u32) -> MemBackend {
+            MemBackend { db: self.clone(), next: 1, ready: Vec::new(), cut: Arc::new(AtomicBool::new(false)), latency: polls }
         }
 
         /// Everything stored at `path`, as the REST API would return it.
@@ -838,8 +956,10 @@ pub mod mem {
     pub struct MemBackend {
         db: MemDb,
         next: u64,
-        ready: Vec<(u64, Response)>,
+        /// Answers waiting for their delay (in polls) to run out.
+        ready: Vec<(u64, Response, u32)>,
         cut: Arc<AtomicBool>,
+        latency: u32,
     }
 
     impl MemBackend {
@@ -855,12 +975,22 @@ pub mod mem {
             let id = self.next;
             self.next += 1;
             let resp = if self.cut.load(Ordering::Relaxed) { Response::default() } else { self.db.handle(&r) };
-            self.ready.push((id, resp));
+            self.ready.push((id, resp, self.latency));
             id
         }
 
         fn poll(&mut self) -> Vec<(u64, Response)> {
-            std::mem::take(&mut self.ready)
+            let mut out = Vec::new();
+            let mut waiting = Vec::new();
+            for (id, resp, left) in std::mem::take(&mut self.ready) {
+                if left == 0 {
+                    out.push((id, resp));
+                } else {
+                    waiting.push((id, resp, left - 1));
+                }
+            }
+            self.ready = waiting;
+            out
         }
     }
 }

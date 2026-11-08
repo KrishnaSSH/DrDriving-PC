@@ -73,6 +73,8 @@ pub struct Lobby {
     /// click (time, count) for double / triple clicks.
     pub caret: usize,
     pub anchor: usize,
+    /// Characters to type as if they came from the keyboard (screenshot scenes and checks).
+    pub injected: std::collections::VecDeque<char>,
     pub field_drag: bool,
     pub blink: f32,
     rep: Vec<(KeyCode, f32)>,
@@ -103,6 +105,7 @@ impl Default for Lobby {
             toast: None,
             caret: 0,
             anchor: 0,
+            injected: std::collections::VecDeque::new(),
             field_drag: false,
             blink: 0.0,
             rep: Vec::new(),
@@ -327,6 +330,8 @@ impl Game {
             }
             Submit::None => {}
         }
+        // keyboard editing (the browser build lets its own input do this instead)
+        self.type_text();
         if self.pads.get_clicked(sp::CH_CANCEL) {
             self.close_text_dialog();
             return;
@@ -489,7 +494,7 @@ impl Game {
         }
         let ctrl = self.keys.down(KeyCode::LeftControl) || self.keys.down(KeyCode::RightControl) || self.keys.down(KeyCode::LeftSuper) || self.keys.down(KeyCode::RightSuper);
         let shift = self.keys.down(KeyCode::LeftShift) || self.keys.down(KeyCode::RightShift);
-        while let Some(c) = get_char_pressed() {
+        while let Some(c) = self.lobby.injected.pop_front().or_else(get_char_pressed) {
             if !ctrl && !c.is_control() {
                 self.insert_text(&c.to_string());
             }

@@ -67,8 +67,8 @@ mod imp {
             let (dtx, done) = channel();
             let jrx = Arc::new(Mutex::new(jrx));
             let agent = ureq::AgentBuilder::new()
-                .timeout_connect(Duration::from_secs(6))
-                .timeout(Duration::from_secs(10))
+                .timeout_connect(Duration::from_secs(4))
+                .timeout(Duration::from_secs(6))
                 .user_agent("drdriving-pc")
                 .build();
             for _ in 0..WORKERS {
@@ -99,7 +99,7 @@ mod imp {
 
     fn perform(agent: &ureq::Agent, base: &str, r: &Request) -> Response {
         // a pooled keep-alive connection the server has closed fails at once: try again on a fresh one
-        for attempt in 0..3 {
+        for attempt in 0..2 {
             let mut rq = agent.request(method_name(r.method), &url_for(base, r));
             if r.want_etag {
                 rq = rq.set("X-Firebase-ETag", "true");
