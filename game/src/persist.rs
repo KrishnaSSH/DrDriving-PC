@@ -33,7 +33,7 @@ pub fn save_path() -> String {
 }
 
 /// Country code from `$LANG` (`en_US.UTF-8` -> `us`) for the right-/left-hand-drive default.
-fn locale_country() -> String {
+pub fn locale_country() -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {
         std::env::var("LC_ALL")
@@ -109,4 +109,50 @@ pub fn store(save: &SaveGame) {
         let json = save.to_json();
         unsafe { dr_storage_set(json.as_ptr(), json.len() as u32) };
     }
+}
+
+// ------------------------------------------------------------------ small preferences
+
+/// Short text preferences that do not belong in the (original-format) save: the multiplayer
+/// player name and the last friend channel. Native: `<save dir>/<key>.txt`; web: `localStorage`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn pref_get(key: &str) -> Option<String> {
+    let dir = save_path().parent()?.to_path_buf();
+    std::fs::read_to_string(dir.join(format!("{key}.txt"))).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn pref_set(key: &str, value: &str) {
+    if READ_ONLY.load(Ordering::Relaxed) {
+        return;
+    }
+    if let Some(dir) = save_path().parent() {
+        let _ = std::fs::create_dir_all(dir);
+        let _ = std::fs::write(dir.join(format!("{key}.txt")), value);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+extern "C" {
+    fn dr_pref_set(key: *const u8, key_len: u32, val: *const u8, val_len: u32);
+    fn dr_pref_get(key: *const u8, key_len: u32, dst: *mut u8, cap: u32) -> i32;
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn pref_get(key: &str) -> Option<String> {
+    let mut buf = vec![0u8; 256];
+    let n = unsafe { dr_pref_get(key.as_ptr(), key.len() as u32, buf.as_mut_ptr(), buf.len() as u32) };
+    if n <= 0 {
+        return None;
+    }
+    buf.truncate(n as usize);
+    String::from_utf8(buf).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn pref_set(key: &str, value: &str) {
+    if READ_ONLY.load(Ordering::Relaxed) {
+        return;
+    }
+    unsafe { dr_pref_set(key.as_ptr(), key.len() as u32, value.as_ptr(), value.len() as u32) };
 }
