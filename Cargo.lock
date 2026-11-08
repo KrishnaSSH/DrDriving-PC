@@ -135,6 +135,7 @@ dependencies = [
  "drdriving_core",
  "libc",
  "macroquad",
+ "serde_json",
  "ureq",
 ]
 

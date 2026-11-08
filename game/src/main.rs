@@ -8,6 +8,8 @@ mod lobby;
 mod model;
 mod pad;
 mod persist;
+mod presence;
+mod rpc;
 mod scene;
 mod sprites;
 mod ui_menu;

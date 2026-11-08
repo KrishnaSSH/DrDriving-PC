@@ -206,6 +206,11 @@ pub struct Game {
     pub online_notice: String,
     /// Seconds left in which a second Esc forfeits the online race.
     pub forfeit_armed: f32,
+    /// Discord Rich Presence (see `rpc.rs`).
+    pub rpc: crate::rpc::Rpc,
+    /// Counts races so every race restarts the presence timer.
+    pub race_id: u64,
+    pub presence_at: f32,
 }
 
 fn rt(w: u32, h: u32) -> RenderTarget {
@@ -279,6 +284,9 @@ impl Game {
             lobby: Lobby::default(),
             online_notice: String::new(),
             forfeit_armed: 0.0,
+            rpc: crate::rpc::Rpc::new(),
+            race_id: 0,
+            presence_at: 0.0,
         };
         game.render_coin = game.save.coin as f64;
         game.render_gold = game.save.gold as f64;
@@ -713,6 +721,7 @@ impl Game {
         self.pointer_input();
         self.keyboard_to_pads();
         self.pump_net();
+        self.update_presence();
         self.update_music();
         if self.auto {
             self.autopilot_menu();
@@ -1028,6 +1037,7 @@ impl Game {
         });
         self.camera_mode = 4;
         self.prev_wheel = 0.0;
+        self.race_id += 1;
         self.enter_mode(2);
     }
 
