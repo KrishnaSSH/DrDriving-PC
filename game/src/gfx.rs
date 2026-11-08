@@ -67,7 +67,9 @@ impl Gfx {
             self.shift
         } else if cx < self.lthr {
             0.0
-        } else if cx > 550.0 {
+        } else if cx > 556.0 {
+            // (not 550: a click button sits at x = 550 and is drawn 3 px right/down while pressed,
+            // which used to push it over this line and make it jump to the right edge)
             2.0 * self.shift
         } else {
             self.shift
