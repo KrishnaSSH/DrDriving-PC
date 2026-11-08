@@ -373,6 +373,15 @@ pub struct GlText {
 }
 
 impl GlText {
+    /// Width of `s` in virtual units at `size` (what `d` / `e` lay out, before any shrinking).
+    pub fn width(&self, g: &Gfx, s: &str, size: f32) -> f32 {
+        if s.is_empty() {
+            return 0.0;
+        }
+        let px = (size * g.k).round().max(1.0);
+        measure_text(s, self.font.as_ref(), px as u16, 1.0).width / g.k
+    }
+
     pub fn d(&self, g: &Gfx, s: &str, x: f32, y: f32, align: i32, size: f32) -> f32 {
         self.e(g, s, x, y, align, size, 380.0)
     }

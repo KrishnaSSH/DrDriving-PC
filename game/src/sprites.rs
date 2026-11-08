@@ -179,3 +179,10 @@ pub const SUD: Spr = s(12.0, 775.0, 286.0, 170.0);
 pub const fn mission_icon(i: usize) -> Spr {
     s(((i % 4) * 80 + 415) as f32, ((i / 4) * 80 + 585) as f32, 74.0, 74.0)
 }
+
+/// `g_sprWorld[i]`: flag `i` of `world.png` (20 per row, 50x38 cells). Out-of-range indices show
+/// flag 156 like the original.
+pub fn flag(i: i32) -> Spr {
+    let i = if (0..=236).contains(&i) { i } else { 156 };
+    s(((i % 20) * 50 + 2) as f32, ((i / 20) * 38 + 2) as f32, 48.0, 36.0)
+}

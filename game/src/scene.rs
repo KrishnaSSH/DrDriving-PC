@@ -221,12 +221,17 @@ pub fn mirror_view(w: &World, which: u8) -> View {
 }
 
 fn draw_wheels(a: &Assets, cx: f32, cz: f32, yaw: f32, h: f32, front: f32, back: f32, ratio: f32, spin: f32) {
+    draw_wheels_tinted(a, cx, cz, yaw, h, front, back, ratio, spin, WHITE);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_wheels_tinted(a: &Assets, cx: f32, cz: f32, yaw: f32, h: f32, front: f32, back: f32, ratio: f32, spin: f32, tint: Color) {
     let base = at(cx, h, cz, yaw);
     let scale = Mat4::from_scale(vec3(ratio, h, h));
     let spin = Mat4::from_rotation_x(spin * DEG);
     for z in [front, -back] {
         let m = base * Mat4::from_translation(vec3(0.0, 0.0, z)) * spin * scale;
-        a.road_model[7].draw(&a.road_tex[7], &m, WHITE);
+        a.road_model[7].draw(&a.road_tex[7], &m, tint);
     }
 }
 
@@ -351,6 +356,16 @@ pub fn render_world(a: &Assets, w: &World, right_driver: bool, view: &View, drif
         a.light_model[p.kind].draw(&rt[9], &m, WHITE);
     }
     draw_wheels(a, p.cx, p.cy, 180.0 - p.angle, p.wheel_height, car(p.kind).wheel_front, car(p.kind).wheel_back, car(p.kind).wheel_width_ratio, p.ang_distance);
+
+    // the remote opponent (`renderOpponentCar`): drawn with glColor4f(0.2, 0.2, 0.2, 0.2), a faint
+    // dark shadow of a car that never collides with ours
+    if w.online {
+        let o = &w.opponent;
+        let ghost = Color::new(0.2, 0.2, 0.2, 0.2);
+        let m = at(o.cx, 0.0, o.cy, 180.0 - o.angle);
+        a.car_model[o.kind].draw(&a.car_tex[o.kind], &m, ghost);
+        draw_wheels_tinted(a, o.cx, o.cy, 180.0 - o.angle, o.wheel_height, car(o.kind).wheel_front, car(o.kind).wheel_back, car(o.kind).wheel_width_ratio, o.ang_distance, ghost);
+    }
 
     // roadside fences
     for cx in x0..=x1 {

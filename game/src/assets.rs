@@ -11,6 +11,8 @@ pub struct Assets {
     pub ui: Texture2D,
     pub menu: Texture2D,
     pub background: Texture2D,
+    /// `world.png`: the 237 country flags shown in online races
+    pub world: Texture2D,
     pub logo: Texture2D,
     pub car_tex: Vec<Texture2D>,
     pub interior: Vec<Texture2D>,
@@ -310,6 +312,7 @@ pub async fn load(base: &str, progress: &mut dyn FnMut(f32, &str, &Texture2D, &O
     step!();
     let background = texture(base, "background.png", false, false).await;
     step!();
+    let world = texture(base, "world.png", false, false).await;
 
     let mut car_tex = Vec::new();
     let mut interior_tex = Vec::new();
@@ -338,6 +341,7 @@ pub async fn load(base: &str, progress: &mut dyn FnMut(f32, &str, &Texture2D, &O
         ui,
         menu,
         background,
+        world,
         logo,
         car_tex,
         interior: interior_tex,
