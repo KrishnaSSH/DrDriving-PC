@@ -174,7 +174,7 @@ impl Audio {
             let mut sounds = Vec::new();
             for (_, f) in ALL.iter() {
                 let b = crate::assets::bytes(base, &format!("sounds/{f}")).await;
-                sounds.push(load_sound_from_bytes(&b).await.unwrap_or_else(|e| panic!("bad sound {f}: {e:?}")));
+                sounds.push(crate::assets::decode_sound(&b).await.unwrap_or_else(|e| panic!("bad sound {f}: {e:?}")));
             }
             Audio {
                 backend: Backend::Native(sounds),

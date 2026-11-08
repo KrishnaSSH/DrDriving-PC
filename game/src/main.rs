@@ -49,10 +49,17 @@ pub async fn boot(base: &str, save: drdriving_core::save::SaveGame, seed: i64) -
         g.layout();
         clear_background(BLACK);
         let text = gfx::GlText { font: font.clone() };
-        ui_menu::draw_loading(&mut g, logo, &text, (done * 100 / total) as i32, cur);
+        let pct = (done * 100 / total) as i32;
+        ui_menu::draw_loading(&mut g, logo, &text, pct, cur);
+        // keep this screen up while the next file downloads (see assets::fetch)
+        let (logo, font) = (logo.clone(), font.clone());
+        assets::set_loading_draw(Some(Box::new(move || {
+            ui_menu::draw_loading(&mut gfx::Gfx::new(), &logo, &gfx::GlText { font: font.clone() }, pct, cur);
+        })));
     })
     .await;
     let audio = audio::Audio::load(base).await;
+    assets::set_loading_draw(None);
     Game::new(a, audio, save, seed)
 }
 

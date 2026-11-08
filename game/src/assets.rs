@@ -57,9 +57,61 @@ pub fn find_assets() -> String {
     }
 }
 
+thread_local! {
+    /// Redraws the loading screen. Web only: while a file is being fetched no frame is drawn, and
+    /// the browser shows those frames as black flashes.
+    static LOADING_DRAW: std::cell::RefCell<Option<Box<dyn Fn()>>> = const { std::cell::RefCell::new(None) };
+}
+
+pub fn set_loading_draw(f: Option<Box<dyn Fn()>>) {
+    LOADING_DRAW.with(|d| *d.borrow_mut() = f);
+}
+
+/// Runs `fut` to completion; on the web the loading screen is redrawn every frame meanwhile.
+#[cfg(target_arch = "wasm32")]
+async fn present_while<T: 'static + std::any::Any>(fut: impl std::future::Future<Output = T> + 'static + Send) -> T {
+    let co = macroquad::experimental::coroutines::start_coroutine(fut);
+    while !co.is_done() {
+        clear_background(BLACK);
+        LOADING_DRAW.with(|d| {
+            if let Some(f) = d.borrow().as_ref() {
+                f();
+            }
+        });
+        next_frame().await;
+    }
+    co.retrieve().expect("coroutine finished")
+}
+
+/// `load_sound_from_bytes` (on the web the decode takes several frames) without black flashes.
+pub async fn decode_sound(data: &[u8]) -> Result<macroquad::audio::Sound, macroquad::Error> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let d = data.to_vec();
+        present_while(async move { macroquad::audio::load_sound_from_bytes(&d).await }).await
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        macroquad::audio::load_sound_from_bytes(data).await
+    }
+}
+
+/// `load_file`, but on the web keep presenting the loading screen every frame while waiting.
+async fn fetch(path: &str) -> Result<Vec<u8>, macroquad::Error> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let p = path.to_string();
+        present_while(async move { load_file(&p).await }).await
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        load_file(path).await
+    }
+}
+
 pub async fn bytes(base: &str, rel: &str) -> Vec<u8> {
     let path = format!("{base}/{rel}");
-    load_file(&path).await.unwrap_or_else(|e| panic!("cannot load {path}: {e}"))
+    fetch(&path).await.unwrap_or_else(|e| panic!("cannot load {path}: {e}"))
 }
 
 async fn texture(base: &str, rel: &str, repeat: bool, mip: bool) -> Texture2D {
@@ -142,7 +194,7 @@ pub async fn load(base: &str, progress: &mut dyn FnMut(usize, usize, &Texture2D,
     let total = 6 + 30 + road_png.len() + road_obj.len();
     let mut done = 0usize;
 
-    let font = match load_file(&format!("{base}/fonts/Roboto-Regular.ttf")).await {
+    let font = match fetch(&format!("{base}/fonts/Roboto-Regular.ttf")).await {
         Ok(b) => load_ttf_font_from_bytes(&b).ok(),
         Err(_) => None,
     };
