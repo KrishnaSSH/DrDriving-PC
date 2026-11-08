@@ -71,6 +71,122 @@ var drBundle = { chunks: [], loaded: 0, total: Number("__ASSET_BYTES__") || 0, s
         new Uint8Array(wasm_memory.buffer, ptr, data.length).set(data);
         return data.length;
       };
+      // ---- small text preferences (player name, friend channel)
+      function text(ptr, len) { return new TextDecoder().decode(new Uint8Array(wasm_memory.buffer, ptr, len)); }
+      env.dr_pref_set = function (kp, kl, vp, vl) {
+        try { localStorage.setItem("drdriving.pref." + text(kp, kl), text(vp, vl)); } catch (e) {}
+      };
+      env.dr_pref_get = function (kp, kl, dst, cap) {
+        var v = null;
+        try { v = localStorage.getItem("drdriving.pref." + text(kp, kl)); } catch (e) {}
+        if (!v) return 0;
+        var data = enc.encode(v);
+        if (data.length > cap) return 0;
+        new Uint8Array(wasm_memory.buffer, dst, data.length).set(data);
+        return data.length;
+      };
+      // ---- multiplayer: the Firebase Realtime Database REST API through fetch
+      var http = { next: 1, reqs: {} };
+      env.dr_http_db = function (dst, cap) {
+        var v = new URLSearchParams(location.search).get("db");
+        if (!v) return 0;
+        var data = enc.encode(v);
+        if (data.length > cap) return 0;
+        new Uint8Array(wasm_memory.buffer, dst, data.length).set(data);
+        return data.length;
+      };
+      env.dr_http_start = function (mp, ml, up, ul, bp, bl, hp, hl) {
+        var id = http.next++, method = text(mp, ml), url = text(up, ul);
+        var r = http.reqs[id] = { state: 0, status: 0, body: new Uint8Array(0), etag: null };
+        var init = { method: method, headers: {}, cache: "no-store", keepalive: method === "DELETE" };
+        text(hp, hl).split("\n").forEach(function (l) {
+          var i = l.indexOf(":");
+          if (i > 0) init.headers[l.slice(0, i).trim()] = l.slice(i + 1).trim();
+        });
+        if (bl > 0) init.body = text(bp, bl);
+        function done(res, t) { r.status = res ? res.status : 0; r.etag = res ? res.headers.get("etag") : null; r.body = enc.encode(t || ""); r.state = 1; }
+        function go(u, i) {
+          return fetch(u, i).then(function (res) { return res.text().then(function (t) { done(res, t); }); });
+        }
+        go(url, init).catch(function () {
+          // a browser or proxy that refuses PATCH: Firebase accepts the override as a query parameter
+          if (method !== "PATCH") return done(null, "");
+          var init2 = Object.assign({}, init, { method: "POST" });
+          return go(url + (url.indexOf("?") < 0 ? "?" : "&") + "x-http-method-override=PATCH", init2).catch(function () { done(null, ""); });
+        });
+        return id;
+      };
+      env.dr_http_state = function (id) { return http.reqs[id] ? http.reqs[id].state : 1; };
+      env.dr_http_status = function (id) { return http.reqs[id] ? http.reqs[id].status : 0; };
+      env.dr_http_body_len = function (id) { return http.reqs[id] ? http.reqs[id].body.length : 0; };
+      env.dr_http_body = function (id, dst) { if (http.reqs[id]) new Uint8Array(wasm_memory.buffer, dst, http.reqs[id].body.length).set(http.reqs[id].body); };
+      env.dr_http_etag_len = function (id) { return http.reqs[id] && http.reqs[id].etag ? enc.encode(http.reqs[id].etag).length : 0; };
+      env.dr_http_etag = function (id, dst) { var d = enc.encode(http.reqs[id].etag); new Uint8Array(wasm_memory.buffer, dst, d.length).set(d); };
+      env.dr_http_free = function (id) { delete http.reqs[id]; };
+      // ---- text input: the game draws its own field; an invisible <input> laid over it only
+      // exists so that phones show their keyboard and the browser handles selection / shortcuts.
+      // The game reads the text and selection back every frame.
+      var tin = { el: null, state: 0 };
+      function tinClose() { if (tin.el) { tin.el.remove(); tin.el = null; } }
+      env.dr_text_close = function () { tinClose(); tin.state = 0; };
+      env.dr_text_open = function (vp, vl, max, numeric) {
+        tinClose();
+        tin.state = 0;
+        if (!document.getElementById("dr-text-style")) {
+          var st = document.createElement("style");
+          st.id = "dr-text-style";
+          st.textContent = "#dr-text::selection{background:transparent;color:transparent}";
+          document.head.appendChild(st);
+        }
+        var el = document.createElement("input");
+        el.id = "dr-text";
+        el.type = "text";
+        el.value = text(vp, vl);
+        el.maxLength = max;
+        el.autocomplete = "off"; el.autocapitalize = "off"; el.spellcheck = false;
+        if (numeric) { el.inputMode = "numeric"; el.pattern = "[0-9]*"; }
+        el.setAttribute("enterkeyhint", "done");
+        el.style.cssText = "position:fixed;left:0;top:0;width:10px;height:10px;z-index:30;margin:0;padding:0;border:0;outline:none;background:transparent;color:transparent;caret-color:transparent;font-size:16px;cursor:text;user-select:text;-webkit-user-select:text";
+        el.addEventListener("keydown", function (e) {
+          e.stopPropagation();
+          if (e.key === "Enter") { e.preventDefault(); tin.state = 1; }
+          else if (e.key === "Escape") { e.preventDefault(); tin.state = 2; }
+        });
+        ["keyup", "keypress"].forEach(function (n) { el.addEventListener(n, function (e) { e.stopPropagation(); }); });
+        el.addEventListener("touchstart", function (e) { e.stopPropagation(); }, { passive: true });
+        document.body.appendChild(el);
+        tin.el = el;
+        setTimeout(function () { try { el.focus(); el.select(); } catch (e) {} }, 60);
+      };
+      // lay the input exactly over the game's field (window px)
+      env.dr_text_pos = function (l, t, w, h) {
+        if (!tin.el) return;
+        var s = tin.el.style;
+        s.left = l + "px"; s.top = t + "px"; s.width = w + "px"; s.height = h + "px";
+      };
+      env.dr_text_state = function () { return tin.el ? tin.state : 0; };
+      env.dr_text_active = function () { return tin.el ? 1 : 0; };
+      env.dr_text_value = function (dst, cap) {
+        if (!tin.el) return 0;
+        var d = enc.encode(tin.el.value);
+        if (d.length > cap) return 0;
+        new Uint8Array(wasm_memory.buffer, dst, d.length).set(d);
+        return d.length;
+      };
+      // selection as character counts: which 0 = start, 1 = end, 2 = 1 if the caret is at the start
+      env.dr_text_sel = function (which) {
+        if (!tin.el) return 0;
+        var v = tin.el.value;
+        var s = tin.el.selectionStart || 0, e = tin.el.selectionEnd == null ? s : tin.el.selectionEnd;
+        if (which === 2) return tin.el.selectionDirection === "backward" ? 1 : 0;
+        return Array.from(v.slice(0, which === 0 ? s : e)).length;
+      };
+      env.dr_text_set = function (vp, vl, start, end) {
+        if (!tin.el) return;
+        var v = text(vp, vl), c = Array.from(v);
+        tin.el.value = v;
+        try { tin.el.setSelectionRange(c.slice(0, start).join("").length, c.slice(0, end).join("").length); } catch (e) {}
+      };
       env.dr_bundle_loaded = function () { return drBundle.loaded; };
       env.dr_bundle_total = function () { return drBundle.total; };
       env.dr_bundle_state = function () { return drBundle.state; };
