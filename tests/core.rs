@@ -43,7 +43,7 @@ fn car_table_matches_decompiled_values() {
 #[test]
 fn save_roundtrip_and_quirks() {
     let mut s = SaveGame::zero_for_country("GB");
-    assert!(s.right_driver && s.show_yard);
+    assert!(!s.right_driver && s.show_yard, "new saves start left-side whatever the locale");
     assert!(!SaveGame::zero_for_country("kr").right_driver);
     s.coin = 1234;
     s.gold = 56;

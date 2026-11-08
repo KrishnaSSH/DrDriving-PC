@@ -118,6 +118,7 @@ impl Default for SaveGame {
 }
 
 /// ISO-3166 alpha-2 codes (lower-case) that the original treats as right-hand-drive.
+#[allow(dead_code)]
 const RIGHT_DRIVER: &[&str] = &[
     "ai", "ag", "au", "bs", "bd", "bb", "bm", "bt", "bw", "bn", "ky", "cx", "ck", "cy", "dm", "fk", "fj", "gd",
     "gy", "hk", "in", "id", "ie", "jm", "jp", "je", "ke", "ki", "ls", "mo", "mw", "my", "mv", "mt", "mu", "ms",
@@ -125,16 +126,14 @@ const RIGHT_DRIVER: &[&str] = &[
 ];
 
 impl SaveGame {
-    /// `zero()`: fresh save with locale-dependent defaults. "kr" is explicitly left-hand/metric;
-    /// everything in [`RIGHT_DRIVER`] flips `right_driver`; GB and US show imperial units.
+    /// `zero()`: fresh save with locale-dependent defaults. This port always starts with the
+    /// steering wheel on the left (the original picked the right side for the countries in
+    /// [`RIGHT_DRIVER`]; Settings still lets the player switch). GB and US show imperial units.
     pub fn zero_for_country(country: &str) -> Self {
         let mut s = Self::default();
         let c = country.to_ascii_lowercase();
         if c == "kr" {
             return s;
-        }
-        if RIGHT_DRIVER.contains(&c.as_str()) {
-            s.right_driver = true;
         }
         if c == "gb" || c == "us" {
             s.show_yard = true;
