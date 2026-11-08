@@ -2,15 +2,27 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>Dr. Driving</title>
 <style>
-  html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden;
+    overscroll-behavior: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent; }
   canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
+  #fs { position: fixed; top: 6px; right: 6px; z-index: 10; width: 34px; height: 34px; padding: 0;
+    border: 0; border-radius: 6px; background: rgba(0,0,0,.45); color: #fff; opacity: .4; cursor: pointer;
+    display: none; align-items: center; justify-content: center; touch-action: manipulation; }
+  #fs:hover, #fs:focus-visible { opacity: 1; }
+  #fs svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 </style>
 </head>
 <body>
 <canvas id="glcanvas" tabindex="1"></canvas>
+<button id="fs" type="button" title="Fullscreen" aria-label="Toggle fullscreen">
+  <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+</button>
 <script>
 // ---- 1. start downloading all game assets right away, in parallel with the wasm ----------------
 // assets.bin is one file (see web/build.sh); the game polls these counters for its loading screen.
@@ -73,6 +85,33 @@ var drBundle = { chunks: [], loaded: 0, total: Number("__ASSET_BYTES__") || 0, s
   });
 })();
 load("drdriving.wasm");
+
+// ---- 3. fullscreen button (hidden where the browser can't do it, e.g. iPhone Safari) ---------
+(function () {
+  var btn = document.getElementById("fs");
+  var el = document.documentElement;
+  var req = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (!req) return;
+  btn.style.display = "flex";
+  function isFs() { return document.fullscreenElement || document.webkitFullscreenElement; }
+  btn.addEventListener("click", function (e) {
+    e.preventDefault();
+    if (isFs()) {
+      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    } else {
+      var p = req.call(el);
+      var lock = function () {
+        try { screen.orientation.lock("landscape").catch(function () {}); } catch (err) {}
+        document.getElementById("glcanvas").focus();
+      };
+      if (p && p.then) p.then(lock, function () {}); else lock();
+    }
+  });
+  // don't let the click turn into game input / keep focus on the button (space/enter would re-toggle)
+  btn.addEventListener("mousedown", function (e) { e.preventDefault(); });
+  btn.addEventListener("touchstart", function (e) { e.stopPropagation(); }, { passive: true });
+  document.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+})();
 </script>
 </body>
 </html>
