@@ -12,5 +12,9 @@ macroquad = { version = "0.4", default-features = false }
 [target.'cfg(any(target_arch = "wasm32", not(target_os = "linux")))'.dependencies]
 macroquad = { version = "0.4", default-features = false, features = ["audio"] }
 
+# multiplayer: Firebase Realtime Database over HTTPS (the browser build uses the page's fetch)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = { version = "2", default-features = false, features = ["tls"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
