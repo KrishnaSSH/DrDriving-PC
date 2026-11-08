@@ -6,6 +6,7 @@ use crate::assets::Assets;
 use crate::audio::{Audio, Snd};
 use crate::gfx::{BFont, Gfx, GlText};
 use crate::keys::Keys;
+use crate::lobby::Lobby;
 use crate::pad::*;
 use crate::persist;
 use crate::scene::{DriftMark, DriftMarks};
@@ -14,6 +15,7 @@ use drdriving_core::economy::{self, Outcome, ShopError};
 use drdriving_core::mission::Mission;
 use drdriving_core::save::SaveGame;
 use drdriving_core::session::{CoinReason, Event, Input, Phase, Session};
+use drdriving_core::rtdb::Connection;
 use drdriving_core::world::World;
 use macroquad::prelude::*;
 
@@ -60,6 +62,21 @@ pub mod sp {
     pub const FPS: usize = 38;
     pub const EXIT_OK: usize = 39;
     pub const EXIT_CANCEL: usize = 40;
+    pub const CH_PLAY: usize = 41;
+    pub const CH_CANCEL: usize = 42;
+    pub const CH_PICK_CANCEL: usize = 43;
+}
+
+/// Centre line of the tab strip (profile / garage / store / settings). The original put it at
+/// 35% of the screen height, which leaves an empty band above it; here it sits at the top, with
+/// the coin / gold counters in the corner above its edge.
+pub fn tab_y(_sh: f32) -> f32 {
+    112.0
+}
+
+/// How far the tab strip (and everything hanging off it) moved up compared with 35% of the height.
+pub fn tab_dy(sh: f32) -> f32 {
+    tab_y(sh) - sh * 0.35
 }
 
 pub const MISSION_NAMES: [&str; 9] = ["SPEED", "HIGHWAY", "DRIFT", "FUEL", "VIP ESCORT", "PARKING", "BROKEN BRAKE", "TRUCK", "LANE"];
@@ -173,13 +190,23 @@ pub struct Game {
     pub no_traffic: bool,
     pub quit: bool,
     // pointer state
-    touch_seen: bool,
+    pub touch_seen: bool,
+    touch_ids: Vec<u64>,
+    /// The mouse cursor last set (0 arrow, 1 pointing hand, 2 text I-beam).
+    pub cursor: u8,
     mouse_down: bool,
     last_mouse: (f32, f32),
     drag_samples: Vec<(f32, f32)>,
     pub last_sh: f32,
     pub wheel_zoom: f32,
     pub clock: f32,
+    // ---- multiplayer
+    pub net: Option<Connection>,
+    pub lobby: Lobby,
+    /// One line under the result screens ("Waiting for the opponent...").
+    pub online_notice: String,
+    /// Seconds left in which a second Esc forfeits the online race.
+    pub forfeit_armed: f32,
 }
 
 fn rt(w: u32, h: u32) -> RenderTarget {
@@ -241,12 +268,18 @@ impl Game {
             no_traffic: false,
             quit: false,
             touch_seen: false,
+            touch_ids: Vec::new(),
+            cursor: 0,
             mouse_down: false,
             last_mouse: (0.0, 0.0),
             drag_samples: Vec::new(),
             last_sh: 0.0,
             wheel_zoom: 1.0,
             clock: 0.0,
+            net: None,
+            lobby: Lobby::default(),
+            online_notice: String::new(),
+            forfeit_armed: 0.0,
         };
         game.render_coin = game.save.coin as f64;
         game.render_gold = game.save.gold as f64;
@@ -291,28 +324,33 @@ impl Game {
         p[sp::MISSION_R].set_pad(PAD_CLICK, 24, 550.0, sh - 35.0, 80.0, 40.0);
         p[sp::CAR_L].set_pad(PAD_CLICK, 18, 180.0, sh * 0.5, 60.0, 45.0);
         p[sp::CAR_R].set_pad(PAD_CLICK, 19, 620.0, sh * 0.5, 60.0, 45.0);
-        p[sp::LEADERBOARDS].set_pad(PAD_CLICK, 15, 40.0, sh * 0.35 + 50.0, 32.0, 35.0);
-        p[sp::ACHIEVEMENTS].set_pad(PAD_CLICK, 14, 112.0, sh * 0.35 + 50.0, 32.0, 35.0);
+        p[sp::LEADERBOARDS].set_pad(PAD_CLICK, 15, 40.0, tab_y(sh) + 50.0, 32.0, 35.0);
+        p[sp::ACHIEVEMENTS].set_pad(PAD_CLICK, 14, 112.0, tab_y(sh) + 50.0, 32.0, 35.0);
         p[sp::CANCEL_SEARCH].set_pad(PAD_CLICK, -1, 520.0, sh - 23.0, 23.0, 23.0);
         p[sp::MENU_MAIN].set_pad(PAD_CLICK, 4, 50.0, sh - 24.0, 48.0, 48.0);
         p[sp::CARGO].set_pad(PAD_CLICK, 5, 150.0, sh - 24.0, 48.0, 48.0);
         p[sp::STORE].set_pad(PAD_CLICK, 6, 250.0, sh - 24.0, 48.0, 48.0);
         p[sp::OPTIONS].set_pad(PAD_CLICK, 7, 350.0, sh - 24.0, 48.0, 48.0);
         p[sp::STAGE_START].set_pad(PAD_CLICK, 8, 720.0, sh - 35.0, 80.0, 40.0);
-        p[sp::PROFILE_L].set_pad(PAD_CLICK, 18, 120.0, sh * 0.7 + 2.0, 60.0, 50.0);
-        p[sp::PROFILE_R].set_pad(PAD_CLICK, 19, 680.0, sh * 0.7 + 2.0, 60.0, 50.0);
-        p[sp::SCROLL].set_pad(PAD_CLICK, -1, 400.0, sh * 0.35, 400.0, 100.0);
-        p[sp::ONLINE].set_pad(PAD_CLICK, -1, 270.0, sh * 0.35, 100.0, 85.0);
-        p[sp::ONLINE_FRIEND].set_pad(PAD_CLICK, -1, 480.0, sh * 0.35, 100.0, 85.0);
-        p[sp::ONLINE_CHANNEL].set_pad(PAD_CLICK, -1, 690.0, sh * 0.35, 100.0, 85.0);
-        p[sp::BUY_CAR].set_pad(PAD_CLICK, 45, cw, sh * 0.7 + 2.0, 100.0, 35.0);
-        p[sp::RENT_CAR].set_pad(PAD_CLICK, 46, cw, sh * 0.7 + 2.0, 100.0, 35.0);
+        p[sp::PROFILE_L].set_pad(PAD_CLICK, 18, 120.0, sh * 0.7 + 2.0 + tab_dy(sh), 60.0, 50.0);
+        p[sp::PROFILE_R].set_pad(PAD_CLICK, 19, 680.0, sh * 0.7 + 2.0 + tab_dy(sh), 60.0, 50.0);
+        p[sp::SCROLL].set_pad(PAD_CLICK, -1, 400.0, tab_y(sh), 400.0, 100.0);
+        p[sp::ONLINE].set_pad(PAD_CLICK, -1, 270.0, tab_y(sh), 100.0, 85.0);
+        p[sp::ONLINE_FRIEND].set_pad(PAD_CLICK, -1, 480.0, tab_y(sh), 100.0, 85.0);
+        p[sp::ONLINE_CHANNEL].set_pad(PAD_CLICK, -1, 690.0, tab_y(sh), 100.0, 85.0);
+        p[sp::BUY_CAR].set_pad(PAD_CLICK, 45, cw, sh * 0.7 + 2.0 + tab_dy(sh), 100.0, 35.0);
+        p[sp::RENT_CAR].set_pad(PAD_CLICK, 46, cw, sh * 0.7 + 2.0 + tab_dy(sh), 100.0, 35.0);
         p[sp::DIALOG_OK].set_pad(PAD_CLICK, 28, cw + 150.0, ch + 40.0, 100.0, 35.0);
         p[sp::DIALOG_CANCEL].set_pad(PAD_CLICK, 27, cw - 150.0, ch + 40.0, 100.0, 35.0);
         p[sp::DIALOG_CONFIRM].set_pad(PAD_CLICK, 28, cw, ch + 40.0, 100.0, 35.0);
         p[sp::FPS].set_pad(PAD_CLICK, -1, sw - 24.0, 24.0, 24.0, 24.0);
         p[sp::EXIT_OK].set_pad(PAD_CLICK, 28, cw + 150.0, sh * 0.53 + 80.0, 110.0, 40.0);
         p[sp::EXIT_CANCEL].set_pad(PAD_CLICK, 27, cw - 150.0, sh * 0.53 + 80.0, 110.0, 40.0);
+        // text dialog buttons
+        // the same OK / cancel icons as the exit dialog
+        p[sp::CH_CANCEL].set_pad(PAD_CLICK, 27, cw - 150.0, sh * 0.53 + 80.0, 110.0, 40.0);
+        p[sp::CH_PLAY].set_pad(PAD_CLICK, 28, cw + 150.0, sh * 0.53 + 80.0, 110.0, 40.0);
+        p[sp::CH_PICK_CANCEL].set_pad(PAD_CLICK, 27, cw, Self::pick_cancel_pos(sh), 60.0, 24.0);
         self.adjust_wheel_position();
     }
 
@@ -378,12 +416,26 @@ impl Game {
             self.touch_seen = true;
         }
         if self.touch_seen {
+            // macroquad reports touches in physical pixels (unlike `mouse_position`, which is already
+            // divided by the device pixel ratio): on a phone every tap was landing 2-3x too far away
+            let dpi = macroquad::miniquad::window::dpi_scale().max(0.01);
             for t in ts {
-                let (x, y) = self.g.to_virtual(t.position.x, t.position.y);
+                let (x, y) = self.g.to_virtual(t.position.x / dpi, t.position.y / dpi);
                 match t.phase {
-                    TouchPhase::Started => self.ptr_began(x, y),
+                    TouchPhase::Started => {
+                        self.touch_ids.push(t.id);
+                        self.ptr_began(x, y);
+                    }
                     TouchPhase::Moved => self.ptr_moved(x, y),
-                    TouchPhase::Ended | TouchPhase::Cancelled => self.ptr_ended(x, y),
+                    TouchPhase::Ended | TouchPhase::Cancelled => {
+                        // a quick tap can start and end inside one frame, and only the end is then
+                        // reported: treat it as a press and a release at the same spot
+                        if !self.touch_ids.contains(&t.id) {
+                            self.ptr_began(x, y);
+                        }
+                        self.touch_ids.retain(|&i| i != t.id);
+                        self.ptr_ended(x, y);
+                    }
                     TouchPhase::Stationary => {}
                 }
             }
@@ -413,6 +465,12 @@ impl Game {
         }
         self.drag_samples.clear();
         self.drag_samples.push((self.clock, x));
+        if matches!(self.mode, 14 | 15) {
+            self.field_began(x, y);
+        }
+        if self.mode == 15 && !self.lobby.field_drag {
+            self.pick_began(y);
+        }
         self.pads.on_began(x, y);
     }
     fn ptr_moved(&mut self, x: f32, y: f32) {
@@ -420,9 +478,19 @@ impl Game {
         if self.drag_samples.len() > 12 {
             self.drag_samples.remove(0);
         }
+        if self.mode == 15 {
+            self.pick_moved(y);
+        }
+        if matches!(self.mode, 14 | 15) {
+            self.field_moved(x);
+        }
         self.pads.on_moved(x, y);
     }
     fn ptr_ended(&mut self, x: f32, y: f32) {
+        if self.mode == 15 {
+            self.pick_ended(x, y);
+        }
+        self.lobby.field_drag = false;
         // `GestureDetector.onFling`: only the scrolling tabs listen for it
         if matches!(self.mode, 9 | 10 | 11) {
             if let (Some(first), Some(last)) = (self.drag_samples.iter().find(|s| self.clock - s.0 < 0.12), self.drag_samples.last()) {
@@ -549,6 +617,15 @@ impl Game {
                 }
             }
             12 => p.deactivate_all(),
+            14 => {
+                p.clear();
+                p.activate(sp::CH_CANCEL);
+                p.activate(sp::CH_PLAY);
+            }
+            15 => {
+                p.clear();
+                p.activate(sp::CH_PICK_CANCEL);
+            }
             13 => {
                 p.deactivate_all();
                 self.cur_app = ((self.cur_app + 3) + self.world.rng.next_int_bound(17) as usize) % 22;
@@ -588,8 +665,7 @@ impl Game {
                     d.str1 = "Not enough driver level".into();
                     d.str2 = "to upgrade.".into();
                 }
-                // port-specific notices for features that need Google/online services
-                10 => d.str1 = "Online play is not available in this version.".into(),
+                // port-specific notices for features that need Google services
                 11 => d.str1 = "Purchases are not available in this version.".into(),
                 12 => {
                     d.str1 = "Achievements".into();
@@ -617,9 +693,9 @@ impl Game {
     pub fn set_anchor(&mut self) {
         let menu = matches!(self.mode, 8..=13);
         self.g.anchor = menu || matches!(self.mode, 1..=6);
-        let y = self.g.sh * 0.35;
+        let y = tab_y(self.g.sh);
         // dialogs sit on top of a tab: their own buttons (at 250/550) stay centred
-        self.g.lthr = if matches!(self.mode, 8..=11) { 360.0 } else { 250.0 };
+        self.g.lthr = if matches!(self.mode, 8..=11) { 360.0 } else if matches!(self.mode, 14 | 15) { 100.0 } else { 250.0 };
         self.g.band = if menu { (y - 88.0, y + 88.0) } else { (0.0, 0.0) };
     }
 
@@ -634,8 +710,10 @@ impl Game {
         if (self.g.sh - self.last_sh).abs() > 0.01 {
             self.layout_pads();
         }
+        self.update_cursor();
         self.pointer_input();
         self.keyboard_to_pads();
+        self.pump_net();
         self.update_music();
         if self.auto {
             self.autopilot_menu();
@@ -655,10 +733,12 @@ impl Game {
             11 => self.process_tab_option(),
             12 => self.process_dialog(),
             13 => self.process_exit(),
+            14 => self.process_lobby(),
+            15 => self.process_picker(),
             _ => {}
         }
         // shared menu-bar buttons (active only in the tab modes and the car-select flow)
-        if self.pads.get_clicked(sp::STAGE_START) {
+        if self.pads.get_clicked(sp::STAGE_START) && !self.searching() {
             self.world.change_mission_random();
             if self.mode == 9 && self.cargo.car < 28 {
                 let c = self.cargo.car;
@@ -733,7 +813,7 @@ impl Game {
         if pressed(KeyCode::F1) && self.mode >= 8 && self.mode <= 11 && !self.keys.down(KeyCode::LeftShift) {
             // F1 = help overlay everywhere
         }
-        if pressed(KeyCode::H) && !matches!(self.mode, 2 | 3) {
+        if pressed(KeyCode::H) && !matches!(self.mode, 2 | 3 | 14 | 15) {
             self.help = !self.help;
         }
         match self.mode {
@@ -754,7 +834,11 @@ impl Game {
                     press(&mut self.pads, sp::STAGE_START);
                 }
                 if pressed(KeyCode::Escape) {
-                    self.enter_mode(13);
+                    if self.searching() {
+                        self.cancel_search(None);
+                    } else {
+                        self.enter_mode(13);
+                    }
                     return;
                 }
                 if self.mode == 8 {
@@ -810,6 +894,16 @@ impl Game {
                 if pressed(KeyCode::Escape) || pressed(KeyCode::N) {
                     press(&mut self.pads, sp::DIALOG_CANCEL);
                     press(&mut self.pads, sp::DIALOG_CONFIRM);
+                }
+            }
+            14 => {
+                if pressed(KeyCode::Escape) {
+                    press(&mut self.pads, sp::CH_CANCEL);
+                }
+            }
+            15 => {
+                if pressed(KeyCode::Escape) {
+                    press(&mut self.pads, sp::CH_PICK_CANCEL);
                 }
             }
             13 => {
@@ -919,12 +1013,20 @@ impl Game {
 
     /// Leave car select and start the countdown.
     pub fn start_race(&mut self) {
+        self.start_race_with(None);
+    }
+
+    /// `online` = (friendly, opponent rating) for a race against a remote player.
+    pub fn start_race_with(&mut self, online: Option<(bool, i32)>) {
         self.cargo.car = self.world.car_mode;
         let mut w = std::mem::replace(&mut self.world, World::new(0, Some(1)));
         w.prepare_race(&self.save);
         self.drifts.clear();
         self.result = ResultInfo::default();
-        self.session = Some(Session::new(w));
+        self.session = Some(match online {
+            Some((friendly, opp_rating)) => Session::new_online(w, friendly, opp_rating),
+            None => Session::new(w),
+        });
         self.camera_mode = 4;
         self.prev_wheel = 0.0;
         self.enter_mode(2);
@@ -995,6 +1097,29 @@ impl Game {
         if matches!(s.phase, Phase::Starting | Phase::Playing) && (self.pads.get_clicked(sp::MENU) || hit(KeyCode::Escape) || hit(KeyCode::P)) {
             input.pause = true;
         }
+        let was_over = s.is_over();
+        let mut events = Vec::new();
+        if s.online.is_some() && !was_over {
+            // no pausing online: Esc twice forfeits
+            self.forfeit_armed = (self.forfeit_armed - dt).max(0.0);
+            if input.pause {
+                input.pause = false;
+                if self.forfeit_armed > 0.0 {
+                    self.forfeit_armed = 0.0;
+                    events.extend(match self.net.as_mut() {
+                        Some(c) => c.forfeit(&mut s, &mut self.save),
+                        None => s.forfeit(&mut self.save),
+                    });
+                } else {
+                    self.forfeit_armed = 2.5;
+                }
+            }
+            // the opponent's position / result; a vanished connection is a win by default
+            events.extend(match self.net.as_mut() {
+                Some(c) => c.pre_frame(&mut s, &mut self.save, dt),
+                None => s.opponent_finished(false, &mut self.save),
+            });
+        }
         if self.auto {
             let (accel, brake, wheel) = drdriving_core::autopilot::drive(&s.world, self.save.right_driver);
             input.accel = accel;
@@ -1014,8 +1139,12 @@ impl Game {
             self.snap_exp = self.save.driver_exp;
             self.snap_gold = self.save.gold;
         }
-        let was_over = s.is_over();
-        let events = s.frame(dt, &input, &mut self.save);
+        events.extend(s.frame(dt, &input, &mut self.save));
+        if s.online.is_some() {
+            if let Some(c) = self.net.as_mut() {
+                c.post_frame(&mut s);
+            }
+        }
         // the session may have re-centred the wheel
         self.pads.p[sp::WHEEL].angle = s.wheel_angle;
         self.camera_mode = s.camera_mode;
@@ -1121,11 +1250,12 @@ impl Game {
         }
     }
 
-    fn leave_race(&mut self) {
+    pub fn leave_race(&mut self) {
         self.stop_race_sounds();
         if let Some(s) = self.session.take() {
             self.world = s.world;
         }
+        self.world.clear_online();
         self.persist();
     }
 
@@ -1139,6 +1269,12 @@ impl Game {
             if !self.pads.p[sp::BACK_TO_MENU].active {
                 self.pads.activate(sp::BACK_TO_MENU);
             }
+        }
+        if self.online_result_buttons() {
+            if self.auto && ready {
+                self.pads.p[sp::RACE].clicked = true;
+            }
+            return;
         }
         if self.pads.get_clicked(sp::RACE) {
             self.leave_race();
@@ -1163,6 +1299,12 @@ impl Game {
             if !self.pads.p[sp::BACK_TO_MENU].active {
                 self.pads.activate(sp::BACK_TO_MENU);
             }
+        }
+        if self.online_result_buttons() {
+            if self.auto && ready {
+                self.pads.p[sp::RACE].clicked = true;
+            }
+            return;
         }
         if self.pads.get_clicked(sp::RACE) {
             self.leave_race();

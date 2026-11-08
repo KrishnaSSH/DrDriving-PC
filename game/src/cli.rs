@@ -22,6 +22,9 @@ struct Opts {
     ff: u32,
     audio_test: bool,
     gui: i32,
+    /// `Some(0)` = Online Match, `Some(n)` = friend channel n.
+    online: Option<i32>,
+    name: Option<String>,
 }
 
 fn parse() -> Opts {
@@ -40,6 +43,8 @@ fn parse() -> Opts {
         ff: 1,
         audio_test: false,
         gui: 0,
+        online: None,
+        name: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -53,6 +58,13 @@ fn parse() -> Opts {
             "--ephemeral" => c.ephemeral = true,
             "--no-traffic" => c.no_traffic = true,
             "--audio-test" => c.audio_test = true,
+            "--online" => c.online = Some(it.next().and_then(|s| s.parse().ok()).unwrap_or(0)),
+            "--db" => {
+                if let Some(u) = it.next() {
+                    std::env::set_var("DRDRIVING_DB", u);
+                }
+            }
+            "--name" => c.name = it.next(),
             "--ff" => c.ff = it.next().and_then(|s| s.parse().ok()).unwrap_or(1).max(1),
             "--script" => c.script = it.next().unwrap_or_default(),
             "--shot-dir" => c.shot_dir = it.next().unwrap_or_default(),
@@ -68,7 +80,7 @@ fn parse() -> Opts {
             }
             "-h" | "--help" => {
                 println!(
-                    "drdriving [options]\n  --seed N               seed the mission generator\n  --autopilot            demo mode: the game plays itself\n  --script \"t:Key,..\"    press keys at given game times\n  --shots \"t:name,..\"    save screenshots at game times into --shot-dir\n  --quit-after SECONDS   exit after this much game time\n  --ff N                 N simulation steps per rendered frame\n  --no-traffic           hide AI traffic\n  --ephemeral            use a demo save, never write to disk\n  --shot FILE --scene S  one scene: menu garage store options carselect race race2 race3 highway ending pause dialog exit\n  --audio-test           report the audio backend"
+                    "drdriving [options]\n  --seed N               seed the mission generator\n  --autopilot            demo mode: the game plays itself\n  --script \"t:Key,..\"    press keys at given game times\n  --shots \"t:name,..\"    save screenshots at game times into --shot-dir\n  --quit-after SECONDS   exit after this much game time\n  --ff N                 N simulation steps per rendered frame\n  --no-traffic           hide AI traffic\n  --ephemeral            use a demo save, never write to disk\n  --shot FILE --scene S  one scene: menu garage store options carselect race race2 race3 highway ending pause dialog exit\n  --audio-test           report the audio backend\n  --online [CHANNEL]     start searching for an opponent at once (Online Match, or friend channel 100-999)\n  --db URL               multiplayer database (default: the original game's Firebase; or env DRDRIVING_DB)\n  --name NAME            player name shown to the opponent"
                 );
                 std::process::exit(0);
             }
@@ -117,10 +129,18 @@ pub async fn run() {
         }
         return;
     }
+    if let Some(n) = &o.name {
+        game.lobby.name = n.clone();
+    }
     game.auto = o.autopilot;
     game.no_traffic = o.no_traffic;
     if !o.script.is_empty() {
         game.keys = Keys::with_script(&o.script);
+    }
+    match o.online {
+        Some(0) => game.start_quick(),
+        Some(n) => game.start_channel(n),
+        None => {}
     }
     if let Some(path) = &o.shot {
         screenshot(&mut game, &o, path).await;
@@ -172,6 +192,24 @@ async fn screenshot(game: &mut Game, o: &Opts, path: &str) {
         "exit" => {
             game.enter_mode(8);
             game.enter_mode(13);
+        }
+        "channel" => {
+            game.enter_mode(8);
+            game.lobby.channel_text = "427".into();
+            game.enter_lobby();
+        }
+        "name" => {
+            game.enter_mode(11);
+            game.edit_name();
+        }
+        "country" => {
+            game.lobby.country = "IN".into();
+            game.enter_mode(11);
+            game.edit_country();
+        }
+        "toast" => {
+            game.enter_mode(8);
+            game.show_toast("Please input the same number with your friend between 100~999.");
         }
         "menu" => {}
         _ => {

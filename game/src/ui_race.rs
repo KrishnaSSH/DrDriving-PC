@@ -229,6 +229,20 @@ impl Game {
             let (sec, hun) = (rest / 100, rest % 100);
             self.bf.a(g, ui, &format!("{}:{:02}.{:02}", min, sec, hun), 120.0, 12.0);
         }
+        // online: who is ahead, and the forfeit prompt
+        if w.online && matches!(mode, 2 | 3) {
+            // `((int)((mine - theirs) * 0.2)) * 5`, 0 until we have driven 10 m
+            let mut gap = ((w.player.mission_distance - w.opponent.mission_distance) * 0.2) as i32 * 5;
+            if w.travel_distance < 10.0 {
+                gap = 0;
+            }
+            let unit = if self.save.show_yard { "yd " } else { "m " };
+            let side = if w.player.mission_distance > w.opponent.mission_distance { "ahead" } else { "behind" };
+            self.bf.e(g, ui, &format!("{}{}{}", gap.abs(), unit, side), 230.0, 36.0);
+            if self.forfeit_armed > 0.0 {
+                self.text.d(g, if self.touch_seen { "Tap the menu button again to forfeit" } else { "Press Esc again to forfeit" }, cw, sh * 0.3, 0, 24.0);
+            }
+        }
         // left-hand mission gauge
         if mode == 3 || mode == 2 {
             let fx = if self.save.left_wheel { 800.0 - 40.0 } else { 40.0 };
@@ -288,11 +302,20 @@ impl Game {
         if cp.visible {
             g.h(ui, S::CAMERA, cp.rx, cp.ry);
         }
+        if mode == 2 && w.online {
+            g.h(ui, S::UI[21], cw, ch + 50.0); // plate behind the opponent's name
+        }
         if mode == 2 && self.mode_time > 0.6 {
             let i = ((4.0 - ((self.mode_time * 5.0) / 3.0)) as i32).clamp(0, 2) as usize;
             g.h(ui, S::COUNT[i], cw, ch - 78.0);
             g.h(ui, S::UI[5], cw, ch + 10.0);
             self.bf.c(g, ui, MISSION_NAMES[w.mission.index()], cw, ch + 10.0);
+        }
+        if mode == 2 && w.online {
+            // opponent's name and flag under the countdown
+            let name = if w.opponent.name.chars().count() > 1 { w.opponent.name.as_str() } else { "Opponent" };
+            let half = self.text.d(g, name, cw, ch + 50.0, 0, 24.0);
+            g.e(&self.a.world, S::flag(w.opponent.country), cw - 40.0 - half, ch + 50.0, 0.75, 0.75);
         }
         if mode == 3 && w.parking.active {
             self.text.d(g, if w.in_parking_lot { "Change gear to P" } else { "Park at the yellow zone" }, cw, sh - 92.0, 0, 27.0);
@@ -316,6 +339,10 @@ impl Game {
     }
 
     pub fn render_success(&mut self) {
+        if self.is_online_race() {
+            self.render_multi_result(true);
+            return;
+        }
         self.render_gold(0, 0);
         if self.mode_time <= 2.5 {
             return;
@@ -354,6 +381,10 @@ impl Game {
     }
 
     pub fn render_ending(&mut self) {
+        if self.is_online_race() {
+            self.render_multi_result(false);
+            return;
+        }
         let sh = self.g.sh;
         let (cw, ch) = (400.0, sh / 2.0);
         let t = self.mode_time;
@@ -426,8 +457,14 @@ impl Game {
             }
             12 => self.render_dialog(),
             13 => self.render_exit(),
+            14 => self.render_lobby(),
+            15 => self.render_picker(),
             _ => {}
         }
+        if matches!(self.mode, 8..=12) {
+            self.render_search_overlay();
+        }
+        self.render_toast();
         if self.help {
             self.render_help();
         }

@@ -15,6 +15,7 @@ impl Game {
     // ------------------------------------------------------------------ processing
 
     fn scroll_drag(&mut self, which: u8, lo: f32, hi: f32) {
+        let wheel = Self::wheel_notches();
         let pad = self.pads.p[sp::SCROLL].clone();
         let sc = match which {
             0 => &mut self.tab_cargo,
@@ -26,7 +27,8 @@ impl Game {
             sc.drag = (pad.cpx - pad.cx) as f32;
         } else {
             sc.scroll -= self.fling * 0.01;
-            sc.scroll = sc.scroll.clamp(lo, hi);
+            // the mouse wheel moves the strip half a card per notch
+            sc.scroll = (sc.scroll - wheel * 105.0).clamp(lo, hi);
             sc.drag = 0.0;
         }
     }
@@ -166,7 +168,7 @@ impl Game {
 
     pub fn process_tab_option(&mut self) {
         self.fling_decay();
-        if let Some(i) = self.scroll_tap(1, -130.0, 570.0) {
+        if let Some(i) = self.scroll_tap(1, -130.0, 990.0) {
             let s = &mut self.save;
             match i {
                 0 => s.music_disabled = !s.music_disabled,
@@ -196,16 +198,31 @@ impl Game {
                     self.g.scale = crate::gfx::Gfx::scale_for(s.gui_size);
                     self.last_sh = 0.0;
                 }
+                7 => {
+                    self.edit_name();
+                    return;
+                }
+                8 => {
+                    self.edit_country();
+                    return;
+                }
                 _ => return,
             }
             self.persist();
         }
-        self.scroll_drag(1, -130.0, 570.0);
+        self.scroll_drag(1, -130.0, 990.0);
     }
 
     pub fn process_tab_profile(&mut self) {
-        if self.pads.get_clicked(sp::ONLINE) || self.pads.get_clicked(sp::ONLINE_FRIEND) || self.pads.get_clicked(sp::ONLINE_CHANNEL) {
-            self.set_dialog(false, 10, 0, 0);
+        // Online Match searches straight away; vs Friend and Channel both ask for a channel number
+        if self.pads.get_clicked(sp::ONLINE) {
+            if !self.searching() {
+                self.start_quick();
+            }
+            return;
+        }
+        if self.pads.get_clicked(sp::ONLINE_FRIEND) || self.pads.get_clicked(sp::ONLINE_CHANNEL) {
+            self.enter_lobby();
             return;
         }
         if self.pads.get_clicked(sp::PROFILE_L) {
@@ -292,7 +309,7 @@ impl Game {
 
     pub fn render_gold_for_menu(&mut self) {
         self.ease_counters();
-        let f5 = (self.g.sh * 0.35 - 96.0).max(16.0);
+        let f5 = (tab_y(self.g.sh) - 96.0).max(16.0);
         let g = &mut self.g;
         g.h(&self.a.menu, S::MENU[25], 726.0, f5);
         g.h(&self.a.menu, S::MENU[26], 74.0, f5);
@@ -320,7 +337,7 @@ impl Game {
     pub fn render_tab_profile(&mut self) {
         self.render_background(8);
         let sh = self.g.sh;
-        let f3 = sh * 0.35;
+        let f3 = tab_y(sh);
         let f4 = self.pads.p[sp::PROFILE_L].y;
         let cw = 400.0;
         let g = &self.g;
@@ -489,7 +506,7 @@ impl Game {
                 break;
             }
             g.h(m, S::MENU[2], f4 - 8.0, y);
-            if i > -1 && i < 7 {
+            if i > -1 && i < 9 {
                 g.h(m, S::MENU[41], (f4 - 20.5) + 5.0, (y + 72.0) - 14.0);
             }
             let (lab_y, lab_x) = ((y + 72.0) - 14.0, f4 - 18.0);
@@ -546,17 +563,30 @@ impl Game {
                     self.bfb.c(g, m, "GUI Size", f4, y - 12.0);
                     self.bfb.d(g, m, name, lab_x, lab_y, 0.75);
                 }
+                7 => {
+                    // multiplayer player name (not in the original, which used the Play Games name)
+                    self.bfb.c(g, m, "Name", f4, y - 12.0);
+                    let n = self.lobby.name.clone();
+                    self.text.e(g, &n, lab_x, lab_y, 0, 21.0, 80.0);
+                }
+                8 => {
+                    // country: the flag the opponent sees
+                    let code = self.lobby.country.clone();
+                    let idx = drdriving_core::net::country_index(&code);
+                    g.h(&self.a.world, S::flag(idx), f4, y - 12.0);
+                    self.bfb.d(g, m, if code.is_empty() { "---" } else { &code }, lab_x, lab_y, 0.75);
+                }
                 _ => {}
             }
         }
         g.e(m, S::MENU[11], 400.0, (y - 86.0) + 14.0, g.vw / 100.0, 0.5);
         g.e(m, S::MENU[11], 400.0, (y + 86.0) - 14.0, g.vw / 100.0, 0.5);
         g.set_tint(COLOR_GREEN);
-        self.bfb.d(g, m, "Designer / Programmer", 400.0 - 140.0, (sh * 0.68) - 14.0, 0.75);
-        self.bfb.d(g, m, "Graphic Artists", 400.0 - 140.0, (sh * 0.72) + 14.0, 0.75);
+        self.bfb.d(g, m, "Designer / Programmer", 400.0 - 140.0, (sh * 0.68 + tab_dy(sh)) - 14.0, 0.75);
+        self.bfb.d(g, m, "Graphic Artists", 400.0 - 140.0, (sh * 0.72 + tab_dy(sh)) + 14.0, 0.75);
         g.set_tint(DARK);
-        self.bfb.d(g, m, "Sangha An", 400.0 + 140.0, (sh * 0.68) - 14.0, 0.75);
-        self.bfb.d(g, m, "Hyunchan Ko", 400.0 + 140.0, (sh * 0.72) + 14.0, 0.75);
+        self.bfb.d(g, m, "Sangha An", 400.0 + 140.0, (sh * 0.68 + tab_dy(sh)) - 14.0, 0.75);
+        self.bfb.d(g, m, "Hyunchan Ko", 400.0 + 140.0, (sh * 0.72 + tab_dy(sh)) + 14.0, 0.75);
         g.clear_tint();
     }
 
