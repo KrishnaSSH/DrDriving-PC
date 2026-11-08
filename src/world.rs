@@ -440,6 +440,55 @@ impl World {
         }
     }
 
+    /// Prepare for an online race: adopt the agreed course and give the remote opponent its
+    /// car and identity. Call before [`World::prepare_race`]; the opponent is a collision-free
+    /// "ghost" (it never affects the local physics) and the winner is whoever finishes first.
+    pub fn setup_online(&mut self, info: &MissionInfo, opp_car: usize, opp_name: &str, opp_rating: i32, opp_country: i32) {
+        self.online = true;
+        self.mission = info.mission;
+        self.info_online.mission = info.mission;
+        self.info_online.directions = info.directions;
+        self.info_online.aicar = info.aicar;
+        self.opponent.change_type(opp_car);
+        self.opponent.name = opp_name.to_string();
+        self.opponent.rating = opp_rating;
+        self.opponent.country = opp_country;
+    }
+
+    /// Leave online mode (after the race screens are dismissed).
+    pub fn clear_online(&mut self) {
+        self.online = false;
+    }
+
+    /// Apply a position update received from the opponent. The pose is blended towards the new
+    /// sample (updates arrive ~20 times a second; between them `update` extrapolates with the
+    /// velocity) and snapped if it is far off. Non-finite values are ignored.
+    pub fn apply_opponent_update(&mut self, time: f32, dist: f32, cx: f32, cy: f32, vx: f32, vy: f32, angle: f32) {
+        if ![time, dist, cx, cy, vx, vy, angle].iter().all(|v| v.is_finite()) {
+            return;
+        }
+        let o = &mut self.opponent;
+        let (ex, ey) = (cx - o.cx, cy - o.cy);
+        let far = ex * ex + ey * ey > 15.0 * 15.0;
+        // the first sample of a race (still parked on the start line) is also a snap
+        let fresh = o.travel_time <= 0.0;
+        let k = if far || fresh { 1.0 } else { 0.6 };
+        o.cx += ex * k;
+        o.cy += ey * k;
+        let mut da = (angle - o.angle) % 360.0;
+        if da > 180.0 {
+            da -= 360.0;
+        } else if da < -180.0 {
+            da += 360.0;
+        }
+        o.angle = if k >= 1.0 { angle } else { o.angle + da * k };
+        o.v = Vec2::new(vx, vy);
+        o.mission_distance = dist;
+        o.travel_time = time;
+        o.cell_x = java_round(o.cx / BLOCK as f32);
+        o.cell_y = java_round(o.cy / BLOCK as f32);
+    }
+
     /// `initMap()` — garage / menu pose.
     pub fn init_map(&mut self, save: &SaveGame) {
         self.checkpoint.active = false;
@@ -593,6 +642,7 @@ impl World {
         self.opponent.angle = 180.0;
         self.opponent.v = Vec2::ZERO;
         self.opponent.mission_distance = 0.0;
+        self.opponent.travel_time = 0.0;
 
         self.update_center_split();
         let (cx, cy) = (self.cur.0 as f32 * 140.0, self.cur.1 as f32 * 140.0);

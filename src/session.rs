@@ -5,7 +5,7 @@
 //! rules and end-of-race detection, and reports what happened as [`Event`]s so the front end
 //! only has to render and play sounds.
 
-use crate::economy::{self, Outcome, SuccessResult};
+use crate::economy::{self, MultiResult, Outcome, SuccessResult};
 use crate::mission::Mission;
 use crate::save::SaveGame;
 use crate::world::{mode, Controls, World, GEAR_D};
@@ -81,6 +81,16 @@ pub struct RaceResult {
     pub outcome: Outcome,
     pub success: Option<SuccessResult>,
     pub unlocked: Vec<usize>,
+    /// Set for online races: who won and what it paid (see [`economy::finish_multiplayer`]).
+    pub multi: Option<MultiResult>,
+}
+
+/// Settings of an online race against a remote opponent.
+#[derive(Clone, Copy, Debug)]
+pub struct OnlineRace {
+    /// Friendly matches do not change the rating.
+    pub friendly: bool,
+    pub opp_rating: i32,
 }
 
 pub struct Session {
@@ -96,6 +106,13 @@ pub struct Session {
     pub mirror_left: bool,
     pub mirror_right: bool,
     pub result: Option<RaceResult>,
+    /// `Some` for a race against a remote player (no pausing, results go through
+    /// [`economy::finish_multiplayer`]).
+    pub online: Option<OnlineRace>,
+    /// Set when *this* player's race ended by their own doing: `Some(true)` = crossed the
+    /// finish line, `Some(false)` = crashed / ran out of fuel / forfeited. The network layer
+    /// takes it to tell the opponent; it is never set by the opponent's result.
+    pub local_finish: Option<bool>,
 }
 
 /// Wheel angle (degrees) → steering factor (-1..1), including the sensitivity option (-4..4).
@@ -127,7 +144,16 @@ impl Session {
             mirror_left: false,
             mirror_right: false,
             result: None,
+            online: None,
+            local_finish: None,
         }
+    }
+
+    /// Start an online race: `world` must have had [`World::setup_online`] and `prepare_race`.
+    pub fn new_online(world: World, friendly: bool, opp_rating: i32) -> Self {
+        let mut s = Self::new(world);
+        s.online = Some(OnlineRace { friendly, opp_rating });
+        s
     }
 
     pub fn mode_number(&self) -> i32 {
@@ -136,6 +162,8 @@ impl Session {
             Phase::Playing => mode::PLAYING,
             Phase::Paused => 4,
             Phase::Success => mode::SUCCESS,
+            // losing to the opponent lets the car coast to a stop, like a win does
+            Phase::Ending(Outcome::OppWin) => mode::MULTI_ENDING,
             Phase::Ending(_) => 6,
         }
     }
@@ -271,9 +299,53 @@ impl Session {
 
     fn finish(&mut self, outcome: Outcome, save: &mut SaveGame) {
         let run = self.world.run_stats();
-        let unlocked = economy::finish_mission(save, &run, outcome);
-        self.result = Some(RaceResult { outcome, success: None, unlocked });
+        let (unlocked, multi) = match self.online {
+            Some(o) => {
+                let m = economy::finish_multiplayer(save, &run, outcome, o.opp_rating, o.friendly);
+                (m.unlocked.clone(), Some(m))
+            }
+            None => (economy::finish_mission(save, &run, outcome), None),
+        };
+        if self.online.is_some() && matches!(outcome, Outcome::Accident | Outcome::NoFuel) {
+            self.local_finish = Some(false);
+        }
+        self.result = Some(RaceResult { outcome, success: None, unlocked, multi });
         self.set_phase(Phase::Ending(outcome));
+    }
+
+    /// Online race: the opponent's result arrived. `opponent_won == false` (they crashed,
+    /// forfeited or left) makes this player the winner. No-op once this race is decided or
+    /// outside an online race.
+    pub fn opponent_finished(&mut self, opponent_won: bool, save: &mut SaveGame) -> Vec<Event> {
+        let mut ev = Vec::new();
+        if self.online.is_none() || self.is_over() {
+            return ev;
+        }
+        if opponent_won {
+            self.finish(Outcome::OppWin, save);
+        } else {
+            let o = self.online.unwrap();
+            let run = self.world.run_stats();
+            let m = economy::finish_multiplayer(save, &run, Outcome::OppLose, o.opp_rating, o.friendly);
+            self.result = Some(RaceResult { outcome: Outcome::OppLose, success: None, unlocked: m.unlocked.clone(), multi: Some(m) });
+            self.set_phase(Phase::Success);
+            ev.push(Event::Won);
+        }
+        ev
+    }
+
+    /// Online race: give up. Counts as a loss; the car just stops where it is.
+    pub fn forfeit(&mut self, save: &mut SaveGame) -> Vec<Event> {
+        if self.online.is_none() || self.is_over() {
+            return Vec::new();
+        }
+        let o = self.online.unwrap();
+        let run = self.world.run_stats();
+        let m = economy::finish_multiplayer(save, &run, Outcome::NoFuel, o.opp_rating, o.friendly);
+        self.local_finish = Some(false);
+        self.result = Some(RaceResult { outcome: Outcome::NoFuel, success: None, unlocked: m.unlocked.clone(), multi: Some(m) });
+        self.set_phase(Phase::Ending(Outcome::NoFuel));
+        Vec::new()
     }
 
     /// Advance one frame. Returns the events that happened during it.
@@ -288,6 +360,10 @@ impl Session {
                 }
                 return ev;
             }
+            Phase::Ending(Outcome::OppWin) => {
+                self.move_objects(dt, input, save, &mut ev);
+                return ev;
+            }
             Phase::Ending(_) => return ev,
             Phase::Success => {
                 // the car coasts to a stop under automatic braking
@@ -300,7 +376,7 @@ impl Session {
         // ---- gameFrameMove
         self.move_objects(dt, input, save, &mut ev);
 
-        if input.pause {
+        if input.pause && self.online.is_none() {
             self.set_phase(Phase::Paused);
             ev.push(Event::Paused(true));
             return ev;
@@ -394,9 +470,15 @@ impl Session {
 
         if w.pass_check_point() {
             let run = w.run_stats();
-            let success = economy::complete_mission_success(save, &run);
-            let unlocked = success.unlocked.clone();
-            self.result = Some(RaceResult { outcome: Outcome::Success, success: Some(success), unlocked });
+            if let Some(o) = self.online {
+                let m = economy::finish_multiplayer(save, &run, Outcome::Success, o.opp_rating, o.friendly);
+                self.result = Some(RaceResult { outcome: Outcome::Success, success: None, unlocked: m.unlocked.clone(), multi: Some(m) });
+                self.local_finish = Some(true);
+            } else {
+                let success = economy::complete_mission_success(save, &run);
+                let unlocked = success.unlocked.clone();
+                self.result = Some(RaceResult { outcome: Outcome::Success, success: Some(success), unlocked, multi: None });
+            }
             self.set_phase(Phase::Success);
             self.world.on_change_success();
             ev.push(Event::Won);
