@@ -11,9 +11,11 @@ pub mod economy;
 pub mod math;
 pub mod mission;
 pub mod net;
+pub mod netplay;
 pub mod rng;
 pub mod session;
 pub mod traffic;
+pub mod rtdb;
 pub mod save;
 pub mod world;
 
