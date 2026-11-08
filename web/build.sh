@@ -14,6 +14,7 @@ import json,sys
 m=json.load(sys.stdin)
 print(next(p["manifest_path"] for p in m["packages"] if p["name"]=="macroquad"))')
 cp "$(dirname "$mq")/js/mq_js_bundle.js" "$out/"
+cp web/og.png web/icon.png "$out/"
 
 # All assets go into ONE file (a single request with real byte progress instead of ~170 sequential
 # ones). Layout: repeated [u16 path len][path][u32 data len][data], little endian. The logo and
