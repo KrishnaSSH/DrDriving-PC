@@ -41,20 +41,33 @@ async fn main() {
     }
 }
 
+/// Small status line (e.g. "Downloading 3.2 / 11.4 MB") near the bottom of the loading screen.
+fn draw_label(label: &str, font: &Option<Font>) {
+    if label.is_empty() {
+        return;
+    }
+    let size = (screen_height() * 0.035).max(14.0) as u16;
+    let dim = measure_text(label, font.as_ref(), size, 1.0);
+    let params = TextParams { font: font.as_ref(), font_size: size, color: Color::new(1.0, 1.0, 1.0, 0.8), ..Default::default() };
+    draw_text_ex(label, (screen_width() - dim.width) / 2.0, screen_height() * 0.94, params);
+}
+
 /// Load everything (drawing the original loading screen), return a ready `Game`.
 pub async fn boot(base: &str, save: drdriving_core::save::SaveGame, seed: i64) -> Game {
     let mut g = gfx::Gfx::new();
     let cur = (seed.unsigned_abs() % 24) as usize;
-    let a = assets::load(base, &mut |done, total, logo, font| {
+    let a = assets::load(base, &mut |frac, label, logo, font| {
         g.layout();
         clear_background(BLACK);
         let text = gfx::GlText { font: font.clone() };
-        let pct = (done * 100 / total) as i32;
+        let pct = (frac * 100.0) as i32;
         ui_menu::draw_loading(&mut g, logo, &text, pct, cur);
+        draw_label(label, font);
         // keep this screen up while the next file downloads (see assets::fetch)
-        let (logo, font) = (logo.clone(), font.clone());
+        let (logo, font, label) = (logo.clone(), font.clone(), label.to_string());
         assets::set_loading_draw(Some(Box::new(move || {
             ui_menu::draw_loading(&mut gfx::Gfx::new(), &logo, &gfx::GlText { font: font.clone() }, pct, cur);
+            draw_label(&label, &font);
         })));
     })
     .await;

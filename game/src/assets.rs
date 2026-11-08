@@ -110,8 +110,74 @@ async fn fetch(path: &str) -> Result<Vec<u8>, macroquad::Error> {
 }
 
 pub async fn bytes(base: &str, rel: &str) -> Vec<u8> {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(b) = bundle::get(rel) {
+        return b;
+    }
     let path = format!("{base}/{rel}");
     fetch(&path).await.unwrap_or_else(|e| panic!("cannot load {path}: {e}"))
+}
+
+/// Web only: every asset except the loading-screen ones is shipped as one `assets.bin` that
+/// `index.html` starts downloading immediately (one request, real byte progress), instead of
+/// ~170 sequential requests. Layout: repeated `[u16 path len][path][u32 data len][data]`
+/// (little endian), written by `web/build.sh`. Files not in it fall back to a normal fetch.
+#[cfg(target_arch = "wasm32")]
+pub mod bundle {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    extern "C" {
+        fn dr_bundle_loaded() -> i32;
+        fn dr_bundle_total() -> i32;
+        /// 0 = downloading, 1 = done, -1 = failed
+        fn dr_bundle_state() -> i32;
+        fn dr_bundle_read(ptr: *mut u8) -> i32;
+    }
+
+    thread_local! {
+        static BUNDLE: RefCell<Option<(Vec<u8>, HashMap<String, (usize, usize)>)>> = const { RefCell::new(None) };
+    }
+
+    /// (state, bytes loaded, bytes total or 0 if unknown)
+    pub fn status() -> (i32, usize, usize) {
+        unsafe { (dr_bundle_state(), dr_bundle_loaded().max(0) as usize, dr_bundle_total().max(0) as usize) }
+    }
+
+    /// Move the finished download into Rust memory and index it.
+    pub fn take() {
+        let n = unsafe { dr_bundle_loaded() }.max(0) as usize;
+        let mut data = vec![0u8; n];
+        let got = unsafe { dr_bundle_read(data.as_mut_ptr()) }.max(0) as usize;
+        data.truncate(got);
+        let mut index = HashMap::new();
+        let mut i = 0usize;
+        while i + 2 <= data.len() {
+            let pl = u16::from_le_bytes([data[i], data[i + 1]]) as usize;
+            i += 2;
+            let Some(path) = data.get(i..i + pl).and_then(|b| std::str::from_utf8(b).ok()) else { break };
+            let path = path.to_string();
+            i += pl;
+            let Some(l) = data.get(i..i + 4) else { break };
+            let len = u32::from_le_bytes([l[0], l[1], l[2], l[3]]) as usize;
+            i += 4;
+            if i + len > data.len() {
+                break;
+            }
+            index.insert(path, (i, len));
+            i += len;
+        }
+        BUNDLE.with(|b| *b.borrow_mut() = Some((data, index)));
+    }
+
+    pub fn get(rel: &str) -> Option<Vec<u8>> {
+        BUNDLE.with(|b| {
+            let b = b.borrow();
+            let (data, index) = b.as_ref()?;
+            let &(off, len) = index.get(rel)?;
+            Some(data[off..off + len].to_vec())
+        })
+    }
 }
 
 async fn texture(base: &str, rel: &str, repeat: bool, mip: bool) -> Texture2D {
@@ -164,7 +230,7 @@ async fn model(base: &str, rel: &str) -> Model {
     Model::parse(&String::from_utf8_lossy(&b))
 }
 
-pub async fn load(base: &str, progress: &mut dyn FnMut(usize, usize, &Texture2D, &Option<Font>)) -> Assets {
+pub async fn load(base: &str, progress: &mut dyn FnMut(f32, &str, &Texture2D, &Option<Font>)) -> Assets {
     let car_png = |i: usize| match i {
         28 => "cars/AI_car01.png".to_string(),
         29 => "cars/AI_car02.png".to_string(),
@@ -199,11 +265,42 @@ pub async fn load(base: &str, progress: &mut dyn FnMut(usize, usize, &Texture2D,
         Err(_) => None,
     };
     let logo = texture(base, "logo.png", false, false).await;
+    // web: wait for the single-file asset download (started by index.html), showing MB progress
+    #[cfg(target_arch = "wasm32")]
+    {
+        loop {
+            let (state, loaded, size) = bundle::status();
+            if state != 0 {
+                if state > 0 {
+                    bundle::take();
+                }
+                break;
+            }
+            let mb = |b: usize| b as f32 / 1048576.0;
+            let (frac, label) = if size > 0 {
+                ((loaded as f32 / size as f32).min(1.0), format!("Downloading {:.1} / {:.1} MB", mb(loaded), mb(size)))
+            } else {
+                (0.0, format!("Downloading {:.1} MB", mb(loaded)))
+            };
+            progress(frac * 0.7, &label, &logo, &font);
+            next_frame().await;
+        }
+    }
+    // decoding: only present a frame every ~12 ms, so the many tiny steps don't cost a frame each
+    let mut last_present = macroquad::miniquad::date::now();
     macro_rules! step {
         () => {{
             done += 1;
-            progress(done, total, &logo, &font);
-            next_frame().await;
+            let now = macroquad::miniquad::date::now();
+            if now - last_present > 0.012 || done == total {
+                #[cfg(target_arch = "wasm32")]
+                let frac = 0.7 + 0.3 * done as f32 / total as f32;
+                #[cfg(not(target_arch = "wasm32"))]
+                let frac = done as f32 / total as f32;
+                progress(frac, "", &logo, &font);
+                next_frame().await;
+                last_present = macroquad::miniquad::date::now();
+            }
         }};
     }
     step!();

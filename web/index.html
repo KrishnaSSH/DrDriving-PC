@@ -11,24 +11,46 @@
 </head>
 <body>
 <canvas id="glcanvas" tabindex="1"></canvas>
+<script>
+// ---- 1. start downloading all game assets right away, in parallel with the wasm ----------------
+// assets.bin is one file (see web/build.sh); the game polls these counters for its loading screen.
+var drBundle = { chunks: [], loaded: 0, total: Number("__ASSET_BYTES__") || 0, state: 0, data: null };
+(function () {
+  fetch("assets.bin").then(function (res) {
+    if (!res.ok || !res.body) throw new Error("assets.bin: HTTP " + res.status);
+    // Content-Length is the *compressed* size if the server gzips; our own number is the true one
+    if (!drBundle.total) drBundle.total = Number(res.headers.get("content-length")) || 0;
+    var reader = res.body.getReader();
+    function pump() {
+      return reader.read().then(function (r) {
+        if (r.done) { drBundle.state = 1; return; }
+        drBundle.chunks.push(r.value);
+        drBundle.loaded += r.value.length;
+        return pump();
+      });
+    }
+    return pump();
+  }).catch(function (e) { console.warn("asset bundle failed, falling back to per-file loading", e); drBundle.state = -1; });
+})();
+</script>
 <script src="mq_js_bundle.js"></script>
 <script>
-// Save-game storage: the game's `dr_storage_get` / `dr_storage_set` imports, backed by localStorage.
+// ---- 2. imports the wasm expects: save-game storage + the asset bundle -------------------------
 (function () {
   var KEY = "drdriving.save";
   var enc = new TextEncoder();
   miniquad_add_plugin({
-    name: "drdriving_storage",
-    version: "0.1.0",
+    name: "drdriving_web",
+    version: "0.2.0",
     register_plugin: function (importObject) {
-      importObject.env.dr_storage_set = function (ptr, len) {
+      var env = importObject.env;
+      env.dr_storage_set = function (ptr, len) {
         try {
-          var bytes = new Uint8Array(wasm_memory.buffer, ptr, len);
-          localStorage.setItem(KEY, new TextDecoder().decode(bytes));
+          localStorage.setItem(KEY, new TextDecoder().decode(new Uint8Array(wasm_memory.buffer, ptr, len)));
         } catch (e) { console.warn("save failed", e); }
       };
       // returns: 0 = nothing saved, >0 = bytes written, <0 = buffer too small (-needed size)
-      importObject.env.dr_storage_get = function (ptr, cap) {
+      env.dr_storage_get = function (ptr, cap) {
         var text = null;
         try { text = localStorage.getItem(KEY); } catch (e) {}
         if (!text) return 0;
@@ -36,6 +58,16 @@
         if (data.length > cap) return -data.length;
         new Uint8Array(wasm_memory.buffer, ptr, data.length).set(data);
         return data.length;
+      };
+      env.dr_bundle_loaded = function () { return drBundle.loaded; };
+      env.dr_bundle_total = function () { return drBundle.total; };
+      env.dr_bundle_state = function () { return drBundle.state; };
+      // copies the whole finished download into wasm memory at ptr (room for dr_bundle_loaded bytes)
+      env.dr_bundle_read = function (ptr) {
+        var dst = new Uint8Array(wasm_memory.buffer, ptr, drBundle.loaded), off = 0;
+        for (var i = 0; i < drBundle.chunks.length; i++) { dst.set(drBundle.chunks[i], off); off += drBundle.chunks[i].length; }
+        drBundle.chunks = [];
+        return off;
       };
     }
   });
