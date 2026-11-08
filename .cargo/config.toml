@@ -1,0 +1,4 @@
+# Newer Rust no longer lets wasm32-unknown-unknown leave imports undefined; macroquad/miniquad
+# resolve theirs from the JS glue (mq_js_bundle.js + web/index.html) at load time.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=--allow-undefined"]

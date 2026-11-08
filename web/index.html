@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Dr. Driving</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
+</style>
+</head>
+<body>
+<canvas id="glcanvas" tabindex="1"></canvas>
+<script src="mq_js_bundle.js"></script>
+<script>
+// Save-game storage: the game's `dr_storage_get` / `dr_storage_set` imports, backed by localStorage.
+(function () {
+  var KEY = "drdriving.save";
+  var enc = new TextEncoder();
+  miniquad_add_plugin({
+    name: "drdriving_storage",
+    version: "0.1.0",
+    register_plugin: function (importObject) {
+      importObject.env.dr_storage_set = function (ptr, len) {
+        try {
+          var bytes = new Uint8Array(wasm_memory.buffer, ptr, len);
+          localStorage.setItem(KEY, new TextDecoder().decode(bytes));
+        } catch (e) { console.warn("save failed", e); }
+      };
+      // returns: 0 = nothing saved, >0 = bytes written, <0 = buffer too small (-needed size)
+      importObject.env.dr_storage_get = function (ptr, cap) {
+        var text = null;
+        try { text = localStorage.getItem(KEY); } catch (e) {}
+        if (!text) return 0;
+        var data = enc.encode(text);
+        if (data.length > cap) return -data.length;
+        new Uint8Array(wasm_memory.buffer, ptr, data.length).set(data);
+        return data.length;
+      };
+    }
+  });
+})();
+load("drdriving.wasm");
+</script>
+</body>
+</html>
