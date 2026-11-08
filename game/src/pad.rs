@@ -2,7 +2,7 @@
 //! `tool.b` / `tool.n`. The original feeds them touch events; here mouse and touch both do.
 //! Pad types: 1 = analog wheel, 2 = held button, 3 = click button, 4 = gear slider.
 
-pub const MAX_PADS: usize = 52;
+pub const MAX_PADS: usize = 64;
 pub const PAD_ANALOG: i32 = 1;
 pub const PAD_BUTTON: i32 = 2;
 pub const PAD_CLICK: i32 = 3;
